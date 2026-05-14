@@ -9,7 +9,8 @@ User=git-deploy
 Group=git-deploy
 WorkingDirectory=/var/lib/git-deploy-watcher
 EnvironmentFile=-/etc/git-deployer/secrets.env
-ExecStart=/usr/local/bin/git-deploy-watcher --config /etc/git-deployer/config.json
+# Install tree must contain run_watcher.py and git_deploy_watcher/ (see README).
+ExecStart=/usr/bin/python3 /opt/git-deploy-watcher/run_watcher.py --config /etc/git-deployer/config.json
 Restart=always
 RestartSec=10
 

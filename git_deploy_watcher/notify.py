@@ -24,17 +24,17 @@ def truncate_telegram_message(text: str, max_len: int = TELEGRAM_MAX_MESSAGE) ->
 
 @dataclass
 class TelegramRateLimiter:
-    """At most one notification per repo per window_seconds."""
+    """At most one notification per ``rate_key`` per ``window_seconds`` (e.g. ``api:git`` vs ``api:start.sh``)."""
 
     window_seconds: float = 300.0
     _last_sent: dict[str, float] = field(default_factory=dict)
 
-    def allow(self, repo_name: str) -> bool:
+    def allow(self, rate_key: str) -> bool:
         now = time.monotonic()
-        last = self._last_sent.get(repo_name)
+        last = self._last_sent.get(rate_key)
         if last is not None and (now - last) < self.window_seconds:
             return False
-        self._last_sent[repo_name] = now
+        self._last_sent[rate_key] = now
         return True
 
 

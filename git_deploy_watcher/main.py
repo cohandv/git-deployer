@@ -69,6 +69,7 @@ def _notify_start_sh_failure(
 ) -> None:
     token, chat_id = _telegram_env(cfg)
     parts = [
+        "[start.sh failed]",
         f"repo={repo_name}",
         f"branch={branch}",
         f"head={head_after}",
@@ -85,13 +86,53 @@ def _notify_start_sh_failure(
     if not token or not chat_id:
         logger.error("start.sh failure (Telegram not configured): %s", truncate_telegram_message(body, 2000))
         return
-    if not limiter.allow(repo_name):
-        logger.warning("suppressed Telegram for %s (rate limit)", repo_name)
+    rate_key = f"{repo_name}:start.sh"
+    if not limiter.allow(rate_key):
+        logger.warning("suppressed Telegram for %s (rate limit)", rate_key)
         return
     try:
         send_telegram_message(bot_token=token, chat_id=chat_id, text=body)
     except Exception:
         logger.exception("failed to send Telegram alert for %s", repo_name)
+
+
+def _notify_git_failure(
+    cfg: AppConfig,
+    limiter: TelegramRateLimiter,
+    *,
+    repo_name: str,
+    branch: str,
+    url: str,
+    phase: str,
+    err: GitError,
+) -> None:
+    token, chat_id = _telegram_env(cfg)
+    parts = [
+        "[git failed]",
+        f"repo={repo_name}",
+        f"branch={branch}",
+        f"url={url}",
+        f"phase={phase}",
+        f"exit={err.code}",
+        str(err),
+        "--- git stderr ---",
+        _tail(err.stderr),
+        "--- git stdout ---",
+        _tail(err.stdout),
+    ]
+    body = "\n".join(parts)
+
+    if not token or not chat_id:
+        logger.error("git failure (Telegram not configured): %s", truncate_telegram_message(body, 2000))
+        return
+    rate_key = f"{repo_name}:git"
+    if not limiter.allow(rate_key):
+        logger.warning("suppressed Telegram for %s (rate limit)", rate_key)
+        return
+    try:
+        send_telegram_message(bot_token=token, chat_id=chat_id, text=body)
+    except Exception:
+        logger.exception("failed to send Telegram git alert for %s", repo_name)
 
 
 def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str], limiter: TelegramRateLimiter) -> None:
@@ -103,8 +144,21 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
             try:
                 if not repo_path.exists():
                     logger.info("cloning %s into %s", repo.name, repo_path)
-                    clone_repo(repo_path, repo.url, repo.branch, git_env)
-                    head = rev_parse_head(repo_path, git_env)
+                    try:
+                        clone_repo(repo_path, repo.url, repo.branch, git_env)
+                        head = rev_parse_head(repo_path, git_env)
+                    except GitError as e:
+                        logger.error("git clone/setup failed for %s: %s", repo.name, e)
+                        _notify_git_failure(
+                            cfg,
+                            limiter,
+                            repo_name=repo.name,
+                            branch=repo.branch,
+                            url=repo.url,
+                            phase="clone",
+                            err=e,
+                        )
+                        continue
                     logger.info("cloned %s at %s", repo.name, head)
                     try:
                         run_start_sh(repo_path, git_env, cfg.start_sh_timeout_seconds)
@@ -124,17 +178,70 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                     save_last_deployed(cfg.state_file, deployed)
                     continue
 
-                if is_dirty(repo_path, git_env):
-                    logger.warning("repo %s has a dirty working tree; not treating as new revision", repo.name)
+                try:
+                    if is_dirty(repo_path, git_env):
+                        logger.warning(
+                            "repo %s has a dirty working tree; not treating as new revision",
+                            repo.name,
+                        )
+                except GitError as e:
+                    logger.error("git status failed for %s: %s", repo.name, e)
+                    _notify_git_failure(
+                        cfg,
+                        limiter,
+                        repo_name=repo.name,
+                        branch=repo.branch,
+                        url=repo.url,
+                        phase="status",
+                        err=e,
+                    )
+                    continue
 
-                head_before = rev_parse_head(repo_path, git_env)
+                try:
+                    head_before = rev_parse_head(repo_path, git_env)
+                except GitError as e:
+                    logger.error("git rev-parse failed for %s: %s", repo.name, e)
+                    _notify_git_failure(
+                        cfg,
+                        limiter,
+                        repo_name=repo.name,
+                        branch=repo.branch,
+                        url=repo.url,
+                        phase="rev-parse(before)",
+                        err=e,
+                    )
+                    continue
+
                 try:
                     fetch_merge_ff(repo_path, repo.branch, git_env)
                 except GitError as e:
                     logger.error("git update failed for %s: %s", repo.name, e)
+                    _notify_git_failure(
+                        cfg,
+                        limiter,
+                        repo_name=repo.name,
+                        branch=repo.branch,
+                        url=repo.url,
+                        phase="fetch/checkout/merge",
+                        err=e,
+                    )
                     continue
 
-                head_after = rev_parse_head(repo_path, git_env)
+                try:
+                    head_after = rev_parse_head(repo_path, git_env)
+                except GitError as e:
+                    logger.error("git rev-parse failed for %s: %s", repo.name, e)
+                    _notify_git_failure(
+                        cfg,
+                        limiter,
+                        repo_name=repo.name,
+                        branch=repo.branch,
+                        url=repo.url,
+                        phase="rev-parse(after)",
+                        err=e,
+                    )
+                    continue
+
                 if head_after != head_before:
                     logger.info("repo %s updated %s -> %s", repo.name, head_before, head_after)
 
@@ -159,8 +266,6 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                 deployed[repo.name] = head_after
                 save_last_deployed(cfg.state_file, deployed)
                 logger.info("deployed %s at %s", repo.name, head_after)
-            except GitError as e:
-                logger.error("git error for %s: %s", repo.name, e)
             except OSError as e:
                 logger.exception("OS error for %s: %s", repo.name, e)
 

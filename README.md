@@ -1,6 +1,6 @@
 # git-deploy-watcher
 
-Ubuntu-oriented service that **polls multiple Git repositories over SSH**, detects when the configured branch advances, runs each repository’s root **`start.sh`**, persists the last successful deploy revision, and sends **Telegram** alerts when `start.sh` fails.
+Ubuntu-oriented service that **polls multiple Git repositories over SSH**, detects when the configured branch advances, runs each repository’s root **`start.sh`**, persists the last successful deploy revision, and sends **Telegram** alerts when **`start.sh` fails** or **git** operations fail (clone / fetch / merge / etc.).
 
 Git operations use the system **`git`** CLI. Remotes must be **SSH** (`git@host:path` or `ssh://…`). HTTPS is rejected at config load time.
 
@@ -49,8 +49,25 @@ Optional: set `GIT_SSH_COMMAND=…` there instead of using `ssh_identity_file`.
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-pip
+sudo apt install -y git python3 python3-pip python3-venv
 ```
+
+**pip:** the `python3-pip` package installs Pip for the distro Python. Check it:
+
+```bash
+python3 -m pip --version
+pip3 --version
+```
+
+If `apt` cannot install `python3-pip` (minimal image), either use **venv** (recommended for Option B below) or bootstrap Pip once:
+
+```bash
+curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+sudo python3 /tmp/get-pip.py
+rm /tmp/get-pip.py
+```
+
+Then prefer `python3 -m pip …` so you always hit the interpreter you intend.
 
 ### 2. Service user
 
@@ -68,26 +85,64 @@ sudo chmod 755 /etc/git-deployer
 
 ### 4. Install this project
 
-From a checkout of this repository on the server:
+You need the directory that contains both **`run_watcher.py`** and the **`git_deploy_watcher/`** package on disk. Two supported ways:
+
+#### Option A (recommended on servers): copy source — **no pip, no venv**
+
+Works on Ubuntu/Debian **PEP 668** (“externally-managed-environment”) systems because nothing is installed into system Python.
+
+Your checkout only needs **`run_watcher.py`** next to **`git_deploy_watcher/`** (you already have that under e.g. `/var/deploy/apps/git-deployer`). Point systemd at that path, for example:
+
+```text
+ExecStart=/usr/bin/python3 /var/deploy/apps/git-deployer/run_watcher.py --config /etc/git-deployer/config.json
+```
+
+(Optional layout used in the bundled unit: copy/sync the same tree to **`/opt/git-deploy-watcher`**.)
+
+```bash
+sudo mkdir -p /opt/git-deploy-watcher
+sudo rsync -a --delete \
+  --exclude '.git' \
+  /path/to/git-deployer/ /opt/git-deploy-watcher/
+sudo chown -R root:root /opt/git-deploy-watcher
+sudo chmod -R a+rX /opt/git-deploy-watcher
+sudo chmod +x /opt/git-deploy-watcher/run_watcher.py
+```
+
+The default **`git-deploy-watcher.service`** uses **`/opt/git-deploy-watcher/run_watcher.py`**. If your tree lives elsewhere (like **`/var/deploy/apps/git-deployer`**), override **`ExecStart`** accordingly.
+
+#### Option B: virtualenv (use when you want `pip install` without touching system Python)
+
+Modern Ubuntu blocks **`sudo pip install`** into `/usr/bin/python3` unless you pass **`--break-system-packages`** (discouraged). Prefer a **venv owned by `git-deploy`**:
+
+```bash
+sudo apt install -y python3-venv
+sudo mkdir -p /var/lib/git-deploy-watcher
+sudo chown git-deploy:git-deploy /var/lib/git-deploy-watcher
+
+sudo -u git-deploy python3 -m venv /var/lib/git-deploy-watcher/venv
+sudo -u git-deploy /var/lib/git-deploy-watcher/venv/bin/pip install -U pip
+sudo -u git-deploy /var/lib/git-deploy-watcher/venv/bin/pip install /var/deploy/apps/git-deployer
+```
+
+Use this interpreter in systemd:
+
+```text
+ExecStart=/var/lib/git-deploy-watcher/venv/bin/python -m git_deploy_watcher --config /etc/git-deployer/config.json
+```
+
+(or `…/venv/bin/python /var/deploy/apps/git-deployer/run_watcher.py --config …` — both work once the package is installed in that venv).
+
+#### Option C: system Python with `--break-system-packages` (last resort)
+
+Only if you insist on no venv:
 
 ```bash
 cd /path/to/git-deployer
-sudo pip3 install --break-system-packages .
+sudo python3 -m pip install --break-system-packages .
 ```
 
-Ubuntu 24.04 often needs `--break-system-packages` for system-wide `pip`. Alternatively install into a venv owned by `git-deploy` and point `ExecStart` at that venv’s `python`.
-
-Install a small wrapper so systemd can call a stable path:
-
-```bash
-sudo tee /usr/local/bin/git-deploy-watcher >/dev/null <<'EOF'
-#!/bin/sh
-exec python3 -m git_deploy_watcher --config /etc/git-deployer/config.json
-EOF
-sudo chmod +x /usr/local/bin/git-deploy-watcher
-```
-
-`python3 -m git_deploy_watcher` uses whichever environment has the package (PEP 668–safe approach: install with `pip install --user` as `git-deploy` and ensure `PATH` includes `~/.local/bin`, or use a venv and point `ExecStart` to the venv’s `python` running `-m git_deploy_watcher`).
+Then **`/usr/bin/python3 -m git_deploy_watcher`** must be the `ExecStart` line for the same interpreter.
 
 ### 5. Configuration files
 
@@ -130,6 +185,14 @@ Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Optionally add `GIT_SSH_COMMAND
 
 ### 8. systemd
 
+The bundled unit defaults to **`/opt/git-deploy-watcher/run_watcher.py`**. If your tree is under **`/var/deploy/apps/git-deployer`**, edit **`ExecStart`** before enabling:
+
+```ini
+ExecStart=/usr/bin/python3 /var/deploy/apps/git-deployer/run_watcher.py --config /etc/git-deployer/config.json
+```
+
+(With **Option B (venv)**, use **`/var/lib/git-deploy-watcher/venv/bin/python …`** instead — see section 4.)
+
 ```bash
 sudo cp systemd/git-deploy-watcher.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -154,14 +217,42 @@ sudo -u git-deploy git ls-remote git@github.com:org/repo.git HEAD
 1. Talk to [@BotFather](https://t.me/BotFather), create a bot, copy the **token** into `TELEGRAM_BOT_TOKEN`.
 2. Obtain your **chat id** (DM with [@userinfobot](https://t.me/userinfobot) or `getUpdates` after messaging your bot) and set `TELEGRAM_CHAT_ID`.
 
+## Troubleshooting
+
+### `error: externally-managed-environment` (pip / PEP 668)
+
+Ubuntu/Debian **do not allow** `pip install` into the system **`python3`** without **`--break-system-packages`**.
+
+**Recommended:** use **Option A** (`run_watcher.py` + source tree) — **no pip**. Your layout `/var/deploy/apps/git-deployer` is enough if **`ExecStart`** points at that **`run_watcher.py`**.
+
+**Or:** use **Option B** (a **venv** under `/var/lib/git-deploy-watcher/venv` and `pip install` only inside it).
+
+Do **not** set a broken **`GIT_SSH_COMMAND`** (e.g. `ssh -i` with no key path) when running `pip`; SSH env vars are irrelevant to `pip` and a bad value can break unrelated commands.
+
+### `No module named git_deploy_watcher`
+
+Systemd is calling **`python3 -m git_deploy_watcher`**, but that interpreter never had the package installed (or a different `python3` is on `PATH` than the one you used with `pip`).
+
+**Fix:** use **option A** in the install section (copy sources to `/opt/git-deploy-watcher` including `run_watcher.py` and `git_deploy_watcher/`), install the updated **`git-deploy-watcher.service`** from this repo (it uses **`run_watcher.py`**), then:
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart git-deploy-watcher
+```
+
+Sanity check (Ctrl+C to stop once you see it looping):
+
+```bash
+sudo /usr/bin/python3 /opt/git-deploy-watcher/run_watcher.py --config /etc/git-deployer/config.json
+```
+
 ## Behavior summary
 
 - **Clone** if `{base_path}/{name}` is missing (`git clone --branch … --single-branch`).
-- **Update** with `git fetch origin`, `git checkout <branch>`, `git merge --ff-only origin/<branch>` (non-fast-forward stays logged; no Telegram for git errors).
+- **Update** with `git fetch origin`, `git checkout <branch>`, `git merge --ff-only origin/<branch>` (non-fast-forward and other git failures are **logged and sent to Telegram**).
 - **Dirty tree**: logs a warning; does not invent a new revision.
 - **Deploy**: runs `/bin/bash start.sh` in the repo root when the current `HEAD` is not yet recorded as successfully deployed.
 - **State**: after a **successful** `start.sh`, the current `HEAD` SHA is written to `state_file`. Failures keep the old entry so the next poll retries.
-- **Telegram**: only on **`start.sh` non-zero**; messages are truncated to Telegram’s length limit; optional **rate limit** (one alert per repo per 5 minutes).
+- **Telegram**: on **`start.sh` non-zero** and on **git errors** (clone, `status`, `rev-parse`, fetch/checkout/merge); messages are truncated to Telegram’s length limit; **rate limit** is separate per repo for **git** vs **start.sh** (at most one of each kind per 5 minutes per repo).
 
 ## Development
 

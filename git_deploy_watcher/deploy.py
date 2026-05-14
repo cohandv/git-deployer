@@ -3,8 +3,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 
 class StartScriptError(RuntimeError):
     def __init__(
