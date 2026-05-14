@@ -1,31 +1,33 @@
 # git-deploy-watcher
 
-Ubuntu-oriented service that **polls multiple Git repositories over SSH**, detects when the configured branch advances, runs each repository’s root **`start.sh`**, persists the last successful deploy revision, and sends **Telegram** alerts when **`start.sh` fails** or **git** operations fail (clone / fetch / merge / etc.).
+Ubuntu-oriented service that **polls multiple Git repositories over SSH**, detects when the configured branch advances, runs each repository’s root `**start.sh`**, persists the last successful deploy revision, and sends **Telegram** alerts when `**start.sh` fails** or **git** operations fail (clone / fetch / merge / etc.).
 
-Git operations use the system **`git`** CLI. Remotes must be **SSH** (`git@host:path` or `ssh://…`). HTTPS is rejected at config load time.
+Git operations use the system `**git`** CLI. Remotes must be **SSH** (`git@host:path` or `ssh://…`). HTTPS is rejected at config load time.
 
 ## What you need on each application repo
 
-- A **`start.sh`** at the repository root (tracked in Git). It is executed with **`cwd`** set to that directory (the clone path), with **`PWD`** and **`GIT_DEPLOY_REPO_ROOT`** set to the same absolute path so scripts can rely on them.
+- A `**start.sh`** at the repository root (tracked in Git). It is executed with `**cwd**` set to that directory (the clone path), with `**PWD**` and `**GIT_DEPLOY_REPO_ROOT**` set to the same absolute path so scripts can rely on them.
 - The script should be **idempotent** when possible; the watcher may run it after every new revision.
 
 ## Configuration
 
-Copy [`config.example.json`](config.example.json) to `/etc/git-deployer/config.json` and edit:
+Copy `[config.example.json](config.example.json)` to `/etc/git-deployer/config.json` and edit:
 
-| Field | Meaning |
-|--------|--------|
-| `base_path` | Parent directory for checkouts (`{base_path}/{name}/`). |
-| `poll_interval_seconds` | Sleep between full scans (default `60`). |
-| `state_file` | JSON file storing last **successful** deploy SHA per repo. |
-| `start_sh_timeout_seconds` | Timeout for `start.sh` (default `3600`). |
-| `ssh_identity_file` | Optional path to a **private key** used for all `git` calls via `GIT_SSH_COMMAND`. |
-| `telegram` | Optional object; see Telegram section below. |
-| `telegram.bot_token` | Optional **literal** bot token in JSON. If set (non-empty), used instead of the env var named by `bot_token_env`. |
-| `telegram.chat_id` | Optional **literal** chat id (string or JSON integer). If set, used instead of the env var named by `chat_id_env`. |
-| `telegram.bot_token_env` | Env var name used **only when** `bot_token` is omitted. Must be a valid env name in that case (default `TELEGRAM_BOT_TOKEN`). Ignored when `bot_token` is set. |
-| `telegram.chat_id_env` | Env var name used **only when** `chat_id` is omitted. Must be a valid env name then (default `TELEGRAM_CHAT_ID`). Ignored when `chat_id` is set. |
-| `repos[]` | Each entry: `name` (optional), `url` (SSH only), `branch`. |
+
+| Field                      | Meaning                                                                                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `base_path`                | Parent directory for checkouts (`{base_path}/{name}/`).                                                                                                        |
+| `poll_interval_seconds`    | Sleep between full scans (default `60`).                                                                                                                       |
+| `state_file`               | JSON file storing last **successful** deploy SHA per repo.                                                                                                     |
+| `start_sh_timeout_seconds` | Timeout for `start.sh` in seconds (default `300`, five minutes).                                                                                               |
+| `ssh_identity_file`        | Optional path to a **private key** used for all `git` calls via `GIT_SSH_COMMAND`.                                                                             |
+| `telegram`                 | Optional object; see Telegram section below.                                                                                                                   |
+| `telegram.bot_token`       | Optional **literal** bot token in JSON. If set (non-empty), used instead of the env var named by `bot_token_env`.                                              |
+| `telegram.chat_id`         | Optional **literal** chat id (string or JSON integer). If set, used instead of the env var named by `chat_id_env`.                                             |
+| `telegram.bot_token_env`   | Env var name used **only when** `bot_token` is omitted. Must be a valid env name in that case (default `TELEGRAM_BOT_TOKEN`). Ignored when `bot_token` is set. |
+| `telegram.chat_id_env`     | Env var name used **only when** `chat_id` is omitted. Must be a valid env name then (default `TELEGRAM_CHAT_ID`). Ignored when `chat_id` is set.               |
+| `repos[]`                  | Each entry: `name` (optional), `url` (SSH only), `branch`.                                                                                                     |
+
 
 ### Telegram credentials
 
@@ -48,13 +50,13 @@ Examples:
 
 **Mixed:** e.g. token in `secrets.env`, chat id in JSON as `"chat_id": "1380628864"`.
 
-**Common mix-up (supported):** if you put the BotFather string in **`bot_token_env`** instead of **`bot_token`**, or only digits in **`chat_id_env`** instead of **`chat_id`**, the watcher treats that as the literal token/chat id and normalizes the config so the service still starts.
+**Common mix-up (supported):** if you put the BotFather string in `**bot_token_env`** instead of `**bot_token**`, or only digits in `**chat_id_env**` instead of `**chat_id**`, the watcher treats that as the literal token/chat id and normalizes the config so the service still starts.
 
 ### SSH identity precedence
 
-1. If **`GIT_SSH_COMMAND`** is already set in the process environment (for example in `secrets.env` via systemd), it is **left unchanged** and `ssh_identity_file` is ignored.
-2. Otherwise, if **`ssh_identity_file`** is set in JSON, the watcher sets  
-   `GIT_SSH_COMMAND='ssh -i <path> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'`.
+1. If `**GIT_SSH_COMMAND**` is already set in the process environment (for example in `secrets.env` via systemd), it is **left unchanged** and `ssh_identity_file` is ignored.
+2. Otherwise, if `**ssh_identity_file`** is set in JSON, the watcher sets
+  `GIT_SSH_COMMAND='ssh -i <path> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'`.
 3. If neither applies, OpenSSH defaults for the service user apply (`~/.ssh/config`, agent, default key filenames).
 
 You can set `GIT_SSH_COMMAND` in `secrets.env` instead of using `ssh_identity_file` in JSON.
@@ -112,19 +114,19 @@ sudo chmod 755 /etc/git-deployer
 
 ### 4. Install this project
 
-You need the directory that contains both **`run_watcher.py`** and the **`git_deploy_watcher/`** package on disk. Two supported ways:
+You need the directory that contains both `**run_watcher.py**` and the `**git_deploy_watcher/**` package on disk. Two supported ways:
 
 #### Option A (recommended on servers): copy source — **no pip, no venv**
 
 Works on Ubuntu/Debian **PEP 668** (“externally-managed-environment”) systems because nothing is installed into system Python.
 
-Your checkout only needs **`run_watcher.py`** next to **`git_deploy_watcher/`** (you already have that under e.g. `/var/deploy/apps/git-deployer`). Point systemd at that path, for example:
+Your checkout only needs `**run_watcher.py`** next to `**git_deploy_watcher/**` (you already have that under e.g. `/var/deploy/apps/git-deployer`). Point systemd at that path, for example:
 
 ```text
 ExecStart=/usr/bin/python3 /var/deploy/apps/git-deployer/run_watcher.py --config /etc/git-deployer/config.json
 ```
 
-(Optional layout used in the bundled unit: copy/sync the same tree to **`/opt/git-deploy-watcher`**.)
+(Optional layout used in the bundled unit: copy/sync the same tree to `**/opt/git-deploy-watcher**`.)
 
 ```bash
 sudo mkdir -p /opt/git-deploy-watcher
@@ -136,11 +138,11 @@ sudo chmod -R a+rX /opt/git-deploy-watcher
 sudo chmod +x /opt/git-deploy-watcher/run_watcher.py
 ```
 
-The default **`git-deploy-watcher.service`** uses **`/opt/git-deploy-watcher/run_watcher.py`**. If your tree lives elsewhere (like **`/var/deploy/apps/git-deployer`**), override **`ExecStart`** accordingly.
+The default `**git-deploy-watcher.service**` uses `**/opt/git-deploy-watcher/run_watcher.py**`. If your tree lives elsewhere (like `**/var/deploy/apps/git-deployer**`), override `**ExecStart**` accordingly.
 
 #### Option B: virtualenv (use when you want `pip install` without touching system Python)
 
-Modern Ubuntu blocks **`sudo pip install`** into `/usr/bin/python3` unless you pass **`--break-system-packages`** (discouraged). Prefer a **venv owned by `git-deploy`**:
+Modern Ubuntu blocks `**sudo pip install**` into `/usr/bin/python3` unless you pass `**--break-system-packages**` (discouraged). Prefer a **venv owned by `git-deploy`**:
 
 ```bash
 sudo apt install -y python3-venv
@@ -169,7 +171,7 @@ cd /path/to/git-deployer
 sudo python3 -m pip install --break-system-packages .
 ```
 
-Then **`/usr/bin/python3 -m git_deploy_watcher`** must be the `ExecStart` line for the same interpreter.
+Then `**/usr/bin/python3 -m git_deploy_watcher**` must be the `ExecStart` line for the same interpreter.
 
 ### 5. Configuration files
 
@@ -181,29 +183,22 @@ sudo nano /etc/git-deployer/config.json   # set base_path, repos (SSH URLs), bra
 ### 6. SSH deploy key
 
 1. Generate a key **without a passphrase** for automation (example):
-
-   ```bash
+  ```bash
    sudo ssh-keygen -t ed25519 -f /etc/git-deployer/ssh/id_ed25519 -N "" -C "git-deploy-watcher"
-   ```
-
+  ```
 2. Register the **public** key (`id_ed25519.pub`) as a **read-only** deploy key (GitHub, GitLab, Gitea, etc.).
-
 3. Lock down permissions:
-
-   ```bash
+  ```bash
    sudo chown root:git-deploy /etc/git-deployer/ssh/id_ed25519
    sudo chmod 640 /etc/git-deployer/ssh/id_ed25519
-   ```
-
+  ```
    The service user must be able to read the key; `640` with group `git-deploy` satisfies that.
-
 4. **Host keys**: either pre-populate `~git-deploy/.ssh/known_hosts` using `sudo -u git-deploy ssh-keyscan github.com >> ~git-deploy/.ssh/known_hosts`, or rely on `StrictHostKeyChecking=accept-new` from the generated `GIT_SSH_COMMAND` when using `ssh_identity_file`.
-
 5. Point `ssh_identity_file` in `config.json` at `/etc/git-deployer/ssh/id_ed25519`, **or** configure `~git-deploy/.ssh/config` instead and omit `ssh_identity_file`.
 
 ### 7. Telegram `secrets.env`
 
-Skip this step if both **`telegram.bot_token`** and **`telegram.chat_id`** are set in `config.json` (env-only is still recommended for the token).
+Skip this step if both `**telegram.bot_token`** and `**telegram.chat_id**` are set in `config.json` (env-only is still recommended for the token).
 
 ```bash
 sudo install -m 600 /dev/null /etc/git-deployer/secrets.env
@@ -214,13 +209,13 @@ Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for whichever fields you do **no
 
 ### 8. systemd
 
-The bundled unit defaults to **`/opt/git-deploy-watcher/run_watcher.py`**. If your tree is under **`/var/deploy/apps/git-deployer`**, edit **`ExecStart`** before enabling:
+The bundled unit defaults to `**/opt/git-deploy-watcher/run_watcher.py`**. If your tree is under `**/var/deploy/apps/git-deployer**`, edit `**ExecStart**` before enabling:
 
 ```ini
 ExecStart=/usr/bin/python3 /var/deploy/apps/git-deployer/run_watcher.py --config /etc/git-deployer/config.json
 ```
 
-(With **Option B (venv)**, use **`/var/lib/git-deploy-watcher/venv/bin/python …`** instead — see section 4.)
+(With **Option B (venv)**, use `**/var/lib/git-deploy-watcher/venv/bin/python …`** instead — see section 4.)
 
 ```bash
 sudo cp systemd/git-deploy-watcher.service /etc/systemd/system/
@@ -250,19 +245,19 @@ sudo -u git-deploy git ls-remote git@github.com:org/repo.git HEAD
 
 ### `error: externally-managed-environment` (pip / PEP 668)
 
-Ubuntu/Debian **do not allow** `pip install` into the system **`python3`** without **`--break-system-packages`**.
+Ubuntu/Debian **do not allow** `pip install` into the system `**python3`** without `**--break-system-packages**`.
 
-**Recommended:** use **Option A** (`run_watcher.py` + source tree) — **no pip**. Your layout `/var/deploy/apps/git-deployer` is enough if **`ExecStart`** points at that **`run_watcher.py`**.
+**Recommended:** use **Option A** (`run_watcher.py` + source tree) — **no pip**. Your layout `/var/deploy/apps/git-deployer` is enough if `**ExecStart`** points at that `**run_watcher.py**`.
 
 **Or:** use **Option B** (a **venv** under `/var/lib/git-deploy-watcher/venv` and `pip install` only inside it).
 
-Do **not** set a broken **`GIT_SSH_COMMAND`** (e.g. `ssh -i` with no key path) when running `pip`; SSH env vars are irrelevant to `pip` and a bad value can break unrelated commands.
+Do **not** set a broken `**GIT_SSH_COMMAND`** (e.g. `ssh -i` with no key path) when running `pip`; SSH env vars are irrelevant to `pip` and a bad value can break unrelated commands.
 
 ### `No module named git_deploy_watcher`
 
-Systemd is calling **`python3 -m git_deploy_watcher`**, but that interpreter never had the package installed (or a different `python3` is on `PATH` than the one you used with `pip`).
+Systemd is calling `**python3 -m git_deploy_watcher**`, but that interpreter never had the package installed (or a different `python3` is on `PATH` than the one you used with `pip`).
 
-**Fix:** use **option A** in the install section (copy sources to `/opt/git-deploy-watcher` including `run_watcher.py` and `git_deploy_watcher/`), install the updated **`git-deploy-watcher.service`** from this repo (it uses **`run_watcher.py`**), then:
+**Fix:** use **option A** in the install section (copy sources to `/opt/git-deploy-watcher` including `run_watcher.py` and `git_deploy_watcher/`), install the updated `**git-deploy-watcher.service`** from this repo (it uses `**run_watcher.py**`), then:
 
 ```bash
 sudo systemctl daemon-reload && sudo systemctl restart git-deploy-watcher
@@ -274,13 +269,49 @@ Sanity check (Ctrl+C to stop once you see it looping):
 sudo /usr/bin/python3 /opt/git-deploy-watcher/run_watcher.py --config /etc/git-deployer/config.json
 ```
 
+### `systemctl restart` from `start.sh` (“Interactive authentication required”)
+
+The watcher runs `start.sh` as the **`User=`** value from the unit (for example `git-deploy`). There is **no terminal**, so anything that asks for a password (including **PolicyKit** prompts for `systemctl`) fails with errors like **“Interactive authentication required”**.
+
+**Fix:** do **not** use `sudo` in `start.sh`. Grant that user permission to manage only the units it needs:
+
+1. Copy the example rule (it already allows **`git-deploy`** to manage **`git-deploy-watcher.service`**). Edit the file only if you use a different `User=` or need extra units:
+
+   ```bash
+   sudo cp polkit/99-git-deploy-manage-units.rules.example /etc/polkit-1/rules.d/99-git-deploy-manage-units.rules
+   sudo nano /etc/polkit-1/rules.d/99-git-deploy-manage-units.rules
+   sudo systemctl try-reload-or-restart polkit polkitd
+   ```
+
+2. Smoke-test as that user (still no sudo):
+
+   ```bash
+   sudo -u git-deploy systemctl restart git-deploy-watcher
+   ```
+
+3. If it still fails, confirm what polkit sees (unit name must match exactly, including `.service`):
+
+   ```bash
+   journalctl -u polkit -u polkitd -b --no-pager -n 50
+   ```
+
+   Or watch D-Bus while running the `systemctl` command once.
+
+#### Restarting `git-deploy-watcher` from a repo it watches
+
+If `start.sh` runs **`systemctl restart git-deploy-watcher`** synchronously, systemd can stop the watcher **before** it writes **`state_file`**. On the next start there is still no successful SHA recorded, so the watcher can treat every poll as “must deploy again” and you get a **restart / `git clean` / deploy loop** even with no new Git commits.
+
+**Mitigation:** defer the restart until after `start.sh` has exited (example in this repo’s `start.sh`: background `sleep` then `systemctl restart`). Then the parent process can record the deploy and exit cleanly.
+
+**Alternative:** avoid `systemctl` in `start.sh` entirely (for example a **`systemd.path`** unit owned by root that reacts to a file your `start.sh` touches, then runs `systemctl restart …` in `Exec=`).
+
 ## Behavior summary
 
 - **Clone** if `{base_path}/{name}` is missing (`git clone --branch … --single-branch`).
 - **Update** with `git fetch origin`, `git checkout <branch>`, `git merge --ff-only origin/<branch>` (non-fast-forward and other git failures are **logged and sent to Telegram**).
-- **Dirty tree**: logs a warning; does not invent a new revision.
+- **Dirty tree**: runs **`git clean -fdx`**, then continues; if still dirty (tracked edits), skips pull and alerts. Cleaning is normal housekeeping, not a deploy failure.
 - **Deploy**: runs `bash start.sh` with **working directory** = repo clone root (`{base_path}/{name}/`); environment includes **`GIT_DEPLOY_REPO_ROOT`** and **`PWD`** pointing at that directory.
-- **State**: after a **successful** `start.sh`, the current `HEAD` SHA is written to `state_file`. Failures keep the old entry so the next poll retries.
+- **State**: after a **successful** `start.sh`, the current `HEAD` SHA is written to `state_file`. Failures keep the old entry so the next poll retries. If there is **no** entry for a repo yet and **no new commit** arrived this fetch, `start.sh` is skipped until you push or seed `state_file` (avoids loops when `start.sh` restarts the watcher before state is saved).
 - **Telegram**: short mobile-friendly lines: **`[git] repo · branch`** / **`[deploy] repo · branch · sha`** plus phase / exit code and **one** trimmed error line; full logs stay in **journald**. Rate limit: separate **git** vs **start.sh** per repo (~5 min each).
 
 ## Development

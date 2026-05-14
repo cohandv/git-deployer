@@ -155,7 +155,7 @@ def load_config(path: Path) -> AppConfig:
         raise ConfigError("state_file must be a non-empty string")
     state_file = Path(state_file_raw).expanduser()
 
-    timeout = data.get("start_sh_timeout_seconds", 3600)
+    timeout = data.get("start_sh_timeout_seconds", 300)
     if not isinstance(timeout, int) or timeout < 1:
         raise ConfigError("start_sh_timeout_seconds must be an integer >= 1")
 

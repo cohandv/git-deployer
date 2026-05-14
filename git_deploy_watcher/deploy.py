@@ -30,15 +30,25 @@ def run_start_sh(repo: Path, env: dict[str, str], timeout: int) -> subprocess.Co
     run_env["PWD"] = root_s
     run_env["GIT_DEPLOY_REPO_ROOT"] = root_s
     # Relative script name + cwd=root guarantees the process runs inside the cloned tree.
-    cp = subprocess.run(
-        ["/bin/bash", "start.sh"],
-        cwd=root_s,
-        env=run_env,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        cp = subprocess.run(
+            ["/bin/bash", "start.sh"],
+            cwd=root_s,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        so = e.stdout if isinstance(e.stdout, str) else (e.stdout.decode() if e.stdout else "")
+        se = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode() if e.stderr else "")
+        raise StartScriptError(
+            f"start.sh timed out after {timeout}s",
+            stdout=so or "",
+            stderr=se or "",
+            code=None,
+        ) from e
     if cp.returncode != 0:
         raise StartScriptError(
             f"start.sh exited with {cp.returncode}",

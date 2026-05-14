@@ -30,6 +30,34 @@ from git_deploy_watcher.state import load_last_deployed, save_last_deployed
 
 logger = logging.getLogger(__name__)
 
+# Avoid huge journal lines if a script is very chatty.
+_START_SH_LOG_MAX_CHARS = 65536
+
+
+def _log_start_sh_streams(
+    repo_name: str,
+    stdout: str,
+    stderr: str,
+    *,
+    failed: bool,
+) -> None:
+    """Log captured ``start.sh`` stdout/stderr (truncated if extremely long)."""
+    log = logger.error if failed else logger.info
+    has_out = bool((stdout or "").strip())
+    has_err = bool((stderr or "").strip())
+    if not has_out and not has_err:
+        if failed:
+            log("start.sh for %s failed with no stdout/stderr captured", repo_name)
+        return
+    for label, raw in ("stdout", stdout or ""), ("stderr", stderr or ""):
+        if not (raw or "").strip():
+            continue
+        n = len(raw)
+        text = raw
+        if n > _START_SH_LOG_MAX_CHARS:
+            text = raw[:_START_SH_LOG_MAX_CHARS] + f"\n... ({label} truncated, total {n} chars)\n"
+        log("start.sh %s for %s (%s):\n%s", "failure" if failed else "success", repo_name, label, text.rstrip("\n"))
+
 
 @dataclass
 class DeployBackoffState:
@@ -142,12 +170,14 @@ def _run_start_sh_with_retries(
     last: StartScriptError | None = None
     for attempt in range(1, attempts + 1):
         try:
-            run_start_sh(repo_path, git_env, cfg.start_sh_timeout_seconds)
+            cp = run_start_sh(repo_path, git_env, cfg.start_sh_timeout_seconds)
+            _log_start_sh_streams(repo_name, cp.stdout or "", cp.stderr or "", failed=False)
             if attempt > 1:
                 logger.info("start.sh succeeded for %s on attempt %d/%d", repo_name, attempt, attempts)
             return
         except StartScriptError as e:
             last = e
+            _log_start_sh_streams(repo_name, e.stdout, e.stderr, failed=True)
             if attempt >= attempts:
                 break
             logger.warning(
@@ -299,7 +329,10 @@ def tick_repo(
                     continue
 
                 if dirty:
-                    logger.info("repo %s has a dirty working tree; running git clean -fdx", repo.name)
+                    logger.info(
+                        "repo %s: working tree dirty; running git clean -fdx (normal cleanup, not a failure)",
+                        repo.name,
+                    )
                     try:
                         clean_repo_fdx(repo_path, git_env)
                     except GitError as e:
@@ -403,6 +436,26 @@ def tick_repo(
                     logger.info("repo %s updated %s -> %s", repo.name, head_before, head_after)
 
                 if last_ok is not None and head_after == last_ok:
+                    continue
+
+                # Avoid running start.sh every poll when no commit advanced: state_file may never
+                # get updated if start.sh restarts this service (process dies before save). Still
+                # run when we are retrying after start.sh failure (backoff streak > 0 or waiting).
+                if (
+                    last_ok is None
+                    and head_after == head_before
+                    and backoff.failure_streak(repo.name) == 0
+                    and backoff.ready(repo.name)
+                ):
+                    logger.info(
+                        "repo %s: no new commits on the remote this fetch and no successful deploy "
+                        "recorded in %s — skipping start.sh until the branch advances or you add "
+                        "\"%s\": \"<HEAD-sha>\" to that file (prevents restart loops when start.sh "
+                        "restarts the watcher before state is saved)",
+                        repo.name,
+                        cfg.state_file,
+                        repo.name,
+                    )
                     continue
 
                 if not backoff.ready(repo.name):

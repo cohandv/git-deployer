@@ -35,6 +35,7 @@ class TestLoadConfig(unittest.TestCase):
             self.assertEqual(cfg.start_sh_failure_retry_interval_seconds, 10)
             self.assertEqual(cfg.deploy_backoff_initial_seconds, 10)
             self.assertEqual(cfg.deploy_backoff_max_seconds, 300)
+            self.assertEqual(cfg.start_sh_timeout_seconds, 300)
 
     def test_start_sh_retry_custom(self) -> None:
         with TemporaryDirectory() as td:

@@ -2,7 +2,7 @@
   "base_path": "/var/deploy/apps",
   "poll_interval_seconds": 60,
   "state_file": "/var/lib/git-deploy-watcher/state.json",
-  "start_sh_timeout_seconds": 3600,
+  "start_sh_timeout_seconds": 300,
   "start_sh_failure_retry_attempts": 5,
   "start_sh_failure_retry_interval_seconds": 10,
   "deploy_backoff_initial_seconds": 10,

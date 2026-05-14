@@ -1,0 +1,25 @@
+// Allow user `git-deploy` to manage `git-deploy-watcher.service` without sudo / password.
+// (Useful if start.sh restarts the watcher or another unit you add below.)
+//
+// Install (drop the .example suffix):
+//   sudo cp 99-git-deploy-manage-units.rules.example /etc/polkit-1/rules.d/99-git-deploy-manage-units.rules
+//   sudo systemctl try-reload-or-restart polkit polkitd
+//
+// If checks fail, run `dbus-monitor --system` while `sudo -u git-deploy systemctl restart git-deploy-watcher`
+// and match `unit` / `subject.user` to this rule. See README.
+
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units")
+        return polkit.Result.NOT_HANDLED;
+    if (subject.user !== "git-deploy")
+        return polkit.Result.NOT_HANDLED;
+
+    var unit = action.lookup("unit");
+    if (unit === "git-deploy-watcher.service")
+        return polkit.Result.YES;
+
+    // Add more units as needed:
+    // if (unit === "my-application.service") return polkit.Result.YES;
+
+    return polkit.Result.NOT_HANDLED;
+});
