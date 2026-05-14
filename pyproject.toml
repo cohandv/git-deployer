@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-deploy-watcher"
+version = "0.1.0"
+description = "Poll SSH git repos and run start.sh on revision changes (Ubuntu/systemd)."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+git-deploy-watcher = "git_deploy_watcher.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["git_deploy_watcher*"]

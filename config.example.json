@@ -1,0 +1,18 @@
+{
+  "base_path": "/var/deploy/apps",
+  "poll_interval_seconds": 60,
+  "state_file": "/var/lib/git-deploy-watcher/state.json",
+  "start_sh_timeout_seconds": 3600,
+  "ssh_identity_file": "/etc/git-deployer/ssh/id_ed25519",
+  "telegram": {
+    "bot_token_env": "TELEGRAM_BOT_TOKEN",
+    "chat_id_env": "TELEGRAM_CHAT_ID"
+  },
+  "repos": [
+    {
+      "name": "api",
+      "url": "git@github.com:org/api.git",
+      "branch": "main"
+    }
+  ]
+}
