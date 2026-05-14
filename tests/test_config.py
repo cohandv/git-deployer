@@ -82,7 +82,7 @@ class TestLoadConfig(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(p)
 
-    def test_telegram_chat_id_env_must_be_name_not_number(self) -> None:
+    def test_telegram_numeric_chat_id_in_chat_id_env_migrated(self) -> None:
         with TemporaryDirectory() as td:
             p = Path(td) / "c.json"
             _write_config(
@@ -93,9 +93,40 @@ class TestLoadConfig(unittest.TestCase):
                     "repos": [{"url": "git@h:a/x.git", "branch": "main"}],
                 },
             )
+            cfg = load_config(p)
+            self.assertEqual(cfg.telegram.chat_id, "1380628864")
+            self.assertEqual(cfg.telegram.chat_id_env, "TELEGRAM_CHAT_ID")
+
+    def test_telegram_bot_token_in_bot_token_env_migrated(self) -> None:
+        token = "1234567890123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd"
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "telegram": {"bot_token_env": token},
+                    "repos": [{"url": "git@h:a/x.git", "branch": "main"}],
+                },
+            )
+            cfg = load_config(p)
+            self.assertEqual(cfg.telegram.bot_token, token)
+            self.assertEqual(cfg.telegram.bot_token_env, "TELEGRAM_BOT_TOKEN")
+
+    def test_telegram_chat_id_env_invalid_non_numeric_still_errors(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "telegram": {"chat_id_env": "not-a-number"},
+                    "repos": [{"url": "git@h:a/x.git", "branch": "main"}],
+                },
+            )
             with self.assertRaises(ConfigError) as ctx:
                 load_config(p)
-            self.assertIn("TELEGRAM_CHAT_ID", str(ctx.exception))
+            self.assertIn("telegram.chat_id", str(ctx.exception).lower())
 
     def test_telegram_inline_token_and_chat_id(self) -> None:
         with TemporaryDirectory() as td:
@@ -179,7 +210,7 @@ class TestLoadConfig(unittest.TestCase):
             )
             with self.assertRaises(ConfigError) as ctx:
                 load_config(p)
-            self.assertIn("environment variable name", str(ctx.exception))
+            self.assertIn("telegram.bot_token", str(ctx.exception).lower())
 
 
 class TestBuildGitEnv(unittest.TestCase):

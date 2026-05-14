@@ -77,6 +77,34 @@ def _derive_name_from_url(url: str) -> str:
     return base
 
 
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _looks_like_telegram_bot_token(value: str) -> bool:
+    """Heuristic: BotFather issues ``<digits>:<secret>`` (secret is alphanumeric + _-)."""
+    s = value.strip()
+    m = re.fullmatch(r"(\d+):([A-Za-z0-9_-]+)", s)
+    if not m:
+        return False
+    return len(m.group(2)) >= 15
+
+
+def _migrate_telegram_misplaced_keys(
+    bot_token: str | None,
+    chat_id: str | None,
+    bte: str,
+    cie: str,
+) -> tuple[str | None, str | None, str, str]:
+    """If token was put in ``bot_token_env`` or chat id in ``chat_id_env``, fix it."""
+    if bot_token is None and not _ENV_NAME.match(bte) and _looks_like_telegram_bot_token(bte):
+        bot_token = bte.strip()
+        bte = "TELEGRAM_BOT_TOKEN"
+    if chat_id is None and not _ENV_NAME.match(cie) and re.fullmatch(r"-?\d{1,20}", cie):
+        chat_id = cie.strip()
+        cie = "TELEGRAM_CHAT_ID"
+    return bot_token, chat_id, bte, cie
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
@@ -167,24 +195,20 @@ def load_config(path: Path) -> AppConfig:
     bte = bte.strip()
     cie = cie.strip()
 
+    bot_token, chat_id, bte, cie = _migrate_telegram_misplaced_keys(bot_token, chat_id, bte, cie)
+
     # Env var *names* must look like real env keys only when we actually read from the environment.
-    _env_name = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
     if bot_token is None:
-        if not _env_name.match(bte):
+        if not _ENV_NAME.match(bte):
             raise ConfigError(
                 "telegram.bot_token_env must be a valid environment variable name (e.g. TELEGRAM_BOT_TOKEN), "
-                "or set telegram.bot_token in JSON instead."
+                "or put the token in telegram.bot_token (not in bot_token_env)."
             )
     if chat_id is None:
-        if not _env_name.match(cie):
-            if re.fullmatch(r"-?\d+", cie):
-                raise ConfigError(
-                    "telegram.chat_id_env must be an environment variable NAME (e.g. TELEGRAM_CHAT_ID), "
-                    "not the numeric chat id. Set telegram.chat_id in JSON or use TELEGRAM_CHAT_ID=… in secrets.env."
-                )
+        if not _ENV_NAME.match(cie):
             raise ConfigError(
                 "telegram.chat_id_env must be a valid environment variable name (e.g. TELEGRAM_CHAT_ID), "
-                "or set telegram.chat_id in JSON instead."
+                "or put the id in telegram.chat_id (not in chat_id_env)."
             )
 
     telegram = TelegramConfig(

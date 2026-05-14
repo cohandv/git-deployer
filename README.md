@@ -48,6 +48,8 @@ Examples:
 
 **Mixed:** e.g. token in `secrets.env`, chat id in JSON as `"chat_id": "1380628864"`.
 
+**Common mix-up (supported):** if you put the BotFather string in **`bot_token_env`** instead of **`bot_token`**, or only digits in **`chat_id_env`** instead of **`chat_id`**, the watcher treats that as the literal token/chat id and normalizes the config so the service still starts.
+
 ### SSH identity precedence
 
 1. If **`GIT_SSH_COMMAND`** is already set in the process environment (for example in `secrets.env` via systemd), it is **left unchanged** and `ssh_identity_file` is ignored.
