@@ -16,6 +16,14 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class TelegramConfig:
+    """Telegram credentials: optional literals plus env fallbacks per field.
+
+    For each of token and chat id, a non-empty **inline** value in config wins;
+    otherwise the value is read from ``os.environ`` using ``*_env`` names.
+    """
+
+    bot_token: str | None
+    chat_id: str | None
     bot_token_env: str
     chat_id_env: str
 
@@ -83,6 +91,21 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data
 
 
+def telegram_credentials(cfg: AppConfig) -> tuple[str | None, str | None]:
+    """Resolve bot token and chat id (inline config overrides env per field)."""
+    t = cfg.telegram.bot_token
+    if t is None or not str(t).strip():
+        t = os.environ.get(cfg.telegram.bot_token_env)
+    else:
+        t = str(t).strip()
+    c = cfg.telegram.chat_id
+    if c is None or not str(c).strip():
+        c = os.environ.get(cfg.telegram.chat_id_env)
+    else:
+        c = str(c).strip()
+    return (t or None, c or None)
+
+
 def load_config(path: Path) -> AppConfig:
     data = _read_json(path)
 
@@ -116,13 +139,56 @@ def load_config(path: Path) -> AppConfig:
         tg_raw = {}
     if not isinstance(tg_raw, dict):
         raise ConfigError("telegram must be an object when set")
+
+    bt_raw = tg_raw.get("bot_token")
+    ci_raw = tg_raw.get("chat_id")
+    bot_token: str | None = None
+    chat_id: str | None = None
+    if bt_raw is not None:
+        if not isinstance(bt_raw, str) or not bt_raw.strip():
+            raise ConfigError("telegram.bot_token must be a non-empty string when set")
+        bot_token = bt_raw.strip()
+    if ci_raw is not None:
+        if isinstance(ci_raw, bool):
+            raise ConfigError("telegram.chat_id must be a string or number when set")
+        if isinstance(ci_raw, int):
+            chat_id = str(ci_raw)
+        elif isinstance(ci_raw, str) and ci_raw.strip():
+            chat_id = ci_raw.strip()
+        else:
+            raise ConfigError("telegram.chat_id must be a non-empty string or integer when set")
+
     bte = tg_raw.get("bot_token_env", "TELEGRAM_BOT_TOKEN")
     cie = tg_raw.get("chat_id_env", "TELEGRAM_CHAT_ID")
     if not isinstance(bte, str) or not bte.strip():
         raise ConfigError("telegram.bot_token_env must be a non-empty string")
     if not isinstance(cie, str) or not cie.strip():
         raise ConfigError("telegram.chat_id_env must be a non-empty string")
-    telegram = TelegramConfig(bot_token_env=bte, chat_id_env=cie)
+    bte = bte.strip()
+    cie = cie.strip()
+
+    _env_name = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    if not _env_name.match(bte):
+        raise ConfigError(
+            "telegram.bot_token_env must be a valid environment variable name (e.g. TELEGRAM_BOT_TOKEN)."
+        )
+    if not _env_name.match(cie):
+        if re.fullmatch(r"-?\d+", cie):
+            raise ConfigError(
+                "telegram.chat_id_env must be an environment variable NAME (e.g. TELEGRAM_CHAT_ID), "
+                "not the numeric chat id. Put the id in telegram.chat_id or in secrets.env as TELEGRAM_CHAT_ID="
+                + cie
+            )
+        raise ConfigError(
+            "telegram.chat_id_env must be a valid environment variable name (e.g. TELEGRAM_CHAT_ID)."
+        )
+
+    telegram = TelegramConfig(
+        bot_token=bot_token,
+        chat_id=chat_id,
+        bot_token_env=bte,
+        chat_id_env=cie,
+    )
 
     repos_raw = data.get("repos")
     if not isinstance(repos_raw, list) or not repos_raw:

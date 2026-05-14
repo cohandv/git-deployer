@@ -11,6 +11,7 @@ from git_deploy_watcher.config import (
     TelegramConfig,
     build_git_env,
     load_config,
+    telegram_credentials,
 )
 
 
@@ -81,6 +82,84 @@ class TestLoadConfig(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(p)
 
+    def test_telegram_chat_id_env_must_be_name_not_number(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "telegram": {"chat_id_env": "1380628864"},
+                    "repos": [{"url": "git@h:a/x.git", "branch": "main"}],
+                },
+            )
+            with self.assertRaises(ConfigError) as ctx:
+                load_config(p)
+            self.assertIn("TELEGRAM_CHAT_ID", str(ctx.exception))
+
+    def test_telegram_inline_token_and_chat_id(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "telegram": {
+                        "bot_token": "123:ABC",
+                        "chat_id": 1380628864,
+                    },
+                    "repos": [{"url": "git@h:a/x.git", "branch": "main"}],
+                },
+            )
+            cfg = load_config(p)
+            self.assertEqual(cfg.telegram.bot_token, "123:ABC")
+            self.assertEqual(cfg.telegram.chat_id, "1380628864")
+            tok, chat = telegram_credentials(cfg)
+            self.assertEqual(tok, "123:ABC")
+            self.assertEqual(chat, "1380628864")
+
+    def test_telegram_inline_overrides_env(self) -> None:
+        import os
+
+        cfg = AppConfig(
+            base_path=Path("/tmp"),
+            poll_interval_seconds=60,
+            state_file=Path("/tmp/state.json"),
+            start_sh_timeout_seconds=60,
+            ssh_identity_file=None,
+            telegram=TelegramConfig(
+                bot_token="from-config",
+                chat_id="99",
+                bot_token_env="TELEGRAM_BOT_TOKEN",
+                chat_id_env="TELEGRAM_CHAT_ID",
+            ),
+            repos=(),
+        )
+        os.environ["TELEGRAM_BOT_TOKEN"] = "from-env"
+        os.environ["TELEGRAM_CHAT_ID"] = "88"
+        try:
+            tok, chat = telegram_credentials(cfg)
+        finally:
+            del os.environ["TELEGRAM_BOT_TOKEN"]
+            del os.environ["TELEGRAM_CHAT_ID"]
+        self.assertEqual(tok, "from-config")
+        self.assertEqual(chat, "99")
+
+    def test_telegram_bot_token_env_must_be_valid_env_name(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "telegram": {"bot_token_env": "my token"},
+                    "repos": [{"url": "git@h:a/x.git", "branch": "main"}],
+                },
+            )
+            with self.assertRaises(ConfigError) as ctx:
+                load_config(p)
+            self.assertIn("environment variable name", str(ctx.exception))
+
 
 class TestBuildGitEnv(unittest.TestCase):
     def test_ssh_identity_sets_git_ssh_command(self) -> None:
@@ -93,7 +172,7 @@ class TestBuildGitEnv(unittest.TestCase):
                 state_file=Path(td) / "state.json",
                 start_sh_timeout_seconds=60,
                 ssh_identity_file=key,
-                telegram=TelegramConfig(bot_token_env="T", chat_id_env="C"),
+                telegram=TelegramConfig(bot_token=None, chat_id=None, bot_token_env="T", chat_id_env="C"),
                 repos=(),
             )
             env = build_git_env(cfg, parent={})
@@ -110,7 +189,7 @@ class TestBuildGitEnv(unittest.TestCase):
                 state_file=Path(td) / "state.json",
                 start_sh_timeout_seconds=60,
                 ssh_identity_file=key,
-                telegram=TelegramConfig(bot_token_env="T", chat_id_env="C"),
+                telegram=TelegramConfig(bot_token=None, chat_id=None, bot_token_env="T", chat_id_env="C"),
                 repos=(),
             )
             env = build_git_env(cfg, parent={"GIT_SSH_COMMAND": "ssh -i /already"})

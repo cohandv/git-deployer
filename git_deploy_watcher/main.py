@@ -3,13 +3,12 @@ from __future__ import annotations
 import argparse
 import fcntl
 import logging
-import os
 import sys
 import time
 from pathlib import Path
 from types import TracebackType
 
-from git_deploy_watcher.config import AppConfig, build_git_env, load_config
+from git_deploy_watcher.config import AppConfig, build_git_env, load_config, telegram_credentials
 from git_deploy_watcher.deploy import StartScriptError, run_start_sh
 from git_deploy_watcher.git_ops import GitError, clone_repo, fetch_merge_ff, is_dirty, rev_parse_head
 from git_deploy_watcher.notify import TelegramRateLimiter, send_telegram_message, truncate_telegram_message
@@ -52,9 +51,7 @@ def _tail(text: str, max_lines: int = 40, max_chars: int = 3500) -> str:
 
 
 def _telegram_env(cfg: AppConfig) -> tuple[str | None, str | None]:
-    token = os.environ.get(cfg.telegram.bot_token_env)
-    chat = os.environ.get(cfg.telegram.chat_id_env)
-    return (token, chat)
+    return telegram_credentials(cfg)
 
 
 def _notify_start_sh_failure(

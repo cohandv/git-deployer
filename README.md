@@ -20,10 +20,33 @@ Copy [`config.example.json`](config.example.json) to `/etc/git-deployer/config.j
 | `state_file` | JSON file storing last **successful** deploy SHA per repo. |
 | `start_sh_timeout_seconds` | Timeout for `start.sh` (default `3600`). |
 | `ssh_identity_file` | Optional path to a **private key** used for all `git` calls via `GIT_SSH_COMMAND`. |
-| `telegram` | Optional object; if omitted, defaults apply for the two fields below. |
-| `telegram.bot_token_env` | Name of env var holding the Telegram bot token (default `TELEGRAM_BOT_TOKEN`). |
-| `telegram.chat_id_env` | Name of env var holding the destination chat id (default `TELEGRAM_CHAT_ID`). |
+| `telegram` | Optional object; see Telegram section below. |
+| `telegram.bot_token` | Optional **literal** bot token in JSON. If set (non-empty), used instead of the env var named by `bot_token_env`. |
+| `telegram.chat_id` | Optional **literal** chat id (string or JSON integer). If set, used instead of the env var named by `chat_id_env`. |
+| `telegram.bot_token_env` | Name of env var used when `bot_token` is omitted (default `TELEGRAM_BOT_TOKEN`). Must be a valid env name. |
+| `telegram.chat_id_env` | Name of env var used when `chat_id` is omitted (default `TELEGRAM_CHAT_ID`). Must be a valid env name (not the numeric id). |
 | `repos[]` | Each entry: `name` (optional), `url` (SSH only), `branch`. |
+
+### Telegram credentials
+
+You can mix **inline** values in `config.json` and **environment** values (e.g. systemd `EnvironmentFile=…/secrets.env`):
+
+- **Per field:** if `telegram.bot_token` is present and non-empty, it wins; otherwise the token is read from `os.environ[telegram.bot_token_env]`. Same for `telegram.chat_id` vs `chat_id_env`.
+
+Examples:
+
+**Env only** (recommended for production): omit `bot_token` / `chat_id`, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `secrets.env`.
+
+**All in config** (simpler, weaker security — protect `config.json` with `chmod 600` and restrict backups):
+
+```json
+"telegram": {
+  "bot_token": "123456789:AA…from BotFather…",
+  "chat_id": 1380628864
+}
+```
+
+**Mixed:** e.g. token in `secrets.env`, chat id in JSON as `"chat_id": "1380628864"`.
 
 ### SSH identity precedence
 
@@ -32,16 +55,18 @@ Copy [`config.example.json`](config.example.json) to `/etc/git-deployer/config.j
    `GIT_SSH_COMMAND='ssh -i <path> -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new'`.
 3. If neither applies, OpenSSH defaults for the service user apply (`~/.ssh/config`, agent, default key filenames).
 
-### Telegram secrets
+You can set `GIT_SSH_COMMAND` in `secrets.env` instead of using `ssh_identity_file` in JSON.
 
-Do **not** put the bot token in `config.json`. Use `/etc/git-deployer/secrets.env` (mode `600`), referenced from systemd:
+### Telegram `secrets.env` (optional if you use inline `bot_token` / `chat_id`)
+
+If either credential is **not** set in `config.json`, load it from the environment. Typical pattern: `/etc/git-deployer/secrets.env` (mode `600`), referenced from systemd:
 
 ```env
 TELEGRAM_BOT_TOKEN=123456:ABC...
 TELEGRAM_CHAT_ID=123456789
 ```
 
-Optional: set `GIT_SSH_COMMAND=…` there instead of using `ssh_identity_file`.
+You can omit this file entirely when both `telegram.bot_token` and `telegram.chat_id` are set in JSON (not recommended for production tokens).
 
 ## Install on Ubuntu (22.04 / 24.04)
 
@@ -176,12 +201,14 @@ sudo nano /etc/git-deployer/config.json   # set base_path, repos (SSH URLs), bra
 
 ### 7. Telegram `secrets.env`
 
+Skip this step if both **`telegram.bot_token`** and **`telegram.chat_id`** are set in `config.json` (env-only is still recommended for the token).
+
 ```bash
 sudo install -m 600 /dev/null /etc/git-deployer/secrets.env
 sudo nano /etc/git-deployer/secrets.env
 ```
 
-Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Optionally add `GIT_SSH_COMMAND`.
+Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for whichever fields you do **not** put inline in JSON. Optionally add `GIT_SSH_COMMAND`.
 
 ### 8. systemd
 
