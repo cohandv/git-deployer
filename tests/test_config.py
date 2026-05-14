@@ -145,6 +145,27 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(tok, "from-config")
         self.assertEqual(chat, "99")
 
+    def test_telegram_inline_allows_garbage_env_names_when_unused(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "telegram": {
+                        "bot_token": "123:ABC",
+                        "chat_id": 1,
+                        "bot_token_env": "my token",
+                        "chat_id_env": "not used",
+                    },
+                    "repos": [{"url": "git@h:a/x.git", "branch": "main"}],
+                },
+            )
+            cfg = load_config(p)
+            tok, chat = telegram_credentials(cfg)
+            self.assertEqual(tok, "123:ABC")
+            self.assertEqual(chat, "1")
+
     def test_telegram_bot_token_env_must_be_valid_env_name(self) -> None:
         with TemporaryDirectory() as td:
             p = Path(td) / "c.json"

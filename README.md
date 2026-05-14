@@ -23,8 +23,8 @@ Copy [`config.example.json`](config.example.json) to `/etc/git-deployer/config.j
 | `telegram` | Optional object; see Telegram section below. |
 | `telegram.bot_token` | Optional **literal** bot token in JSON. If set (non-empty), used instead of the env var named by `bot_token_env`. |
 | `telegram.chat_id` | Optional **literal** chat id (string or JSON integer). If set, used instead of the env var named by `chat_id_env`. |
-| `telegram.bot_token_env` | Name of env var used when `bot_token` is omitted (default `TELEGRAM_BOT_TOKEN`). Must be a valid env name. |
-| `telegram.chat_id_env` | Name of env var used when `chat_id` is omitted (default `TELEGRAM_CHAT_ID`). Must be a valid env name (not the numeric id). |
+| `telegram.bot_token_env` | Env var name used **only when** `bot_token` is omitted. Must be a valid env name in that case (default `TELEGRAM_BOT_TOKEN`). Ignored when `bot_token` is set. |
+| `telegram.chat_id_env` | Env var name used **only when** `chat_id` is omitted. Must be a valid env name then (default `TELEGRAM_CHAT_ID`). Ignored when `chat_id` is set. |
 | `repos[]` | Each entry: `name` (optional), `url` (SSH only), `branch`. |
 
 ### Telegram credentials
