@@ -11,7 +11,13 @@ from types import TracebackType
 from git_deploy_watcher.config import AppConfig, build_git_env, load_config, telegram_credentials
 from git_deploy_watcher.deploy import StartScriptError, run_start_sh
 from git_deploy_watcher.git_ops import GitError, clone_repo, fetch_merge_ff, is_dirty, rev_parse_head
-from git_deploy_watcher.notify import TelegramRateLimiter, send_telegram_message, truncate_telegram_message
+from git_deploy_watcher.notify import (
+    TelegramRateLimiter,
+    format_git_failure_alert,
+    format_start_failure_alert,
+    send_telegram_message,
+    truncate_telegram_message,
+)
 from git_deploy_watcher.state import load_last_deployed, save_last_deployed
 
 logger = logging.getLogger(__name__)
@@ -40,16 +46,6 @@ class RepoLock:
         self._fh = None
 
 
-def _tail(text: str, max_lines: int = 40, max_chars: int = 3500) -> str:
-    lines = (text or "").splitlines()
-    if len(lines) > max_lines:
-        lines = ["…"] + lines[-max_lines:]
-    s = "\n".join(lines)
-    if len(s) > max_chars:
-        s = "…" + s[-max_chars:]
-    return s
-
-
 def _telegram_env(cfg: AppConfig) -> tuple[str | None, str | None]:
     return telegram_credentials(cfg)
 
@@ -60,25 +56,19 @@ def _notify_start_sh_failure(
     *,
     repo_name: str,
     branch: str,
-    head_before: str | None,
     head_after: str,
     err: StartScriptError,
 ) -> None:
     token, chat_id = _telegram_env(cfg)
-    parts = [
-        "[start.sh failed]",
-        f"repo={repo_name}",
-        f"branch={branch}",
-        f"head={head_after}",
-    ]
-    if head_before is not None:
-        parts.append(f"last_deployed={head_before}")
-    parts.append(f"start_sh_exit={err.code}")
-    parts.append("--- start.sh stdout ---")
-    parts.append(_tail(err.stdout))
-    parts.append("--- start.sh stderr ---")
-    parts.append(_tail(err.stderr))
-    body = "\n".join(parts)
+    body = format_start_failure_alert(
+        repo_name=repo_name,
+        branch=branch,
+        head_sha=head_after,
+        exit_code=err.code,
+        err_message=str(err),
+        stderr=err.stderr,
+        stdout=err.stdout,
+    )
 
     if not token or not chat_id:
         logger.error("start.sh failure (Telegram not configured): %s", truncate_telegram_message(body, 2000))
@@ -99,25 +89,21 @@ def _notify_git_failure(
     *,
     repo_name: str,
     branch: str,
-    url: str,
     phase: str,
     err: GitError,
+    head_sha: str | None = None,
 ) -> None:
     token, chat_id = _telegram_env(cfg)
-    parts = [
-        "[git failed]",
-        f"repo={repo_name}",
-        f"branch={branch}",
-        f"url={url}",
-        f"phase={phase}",
-        f"exit={err.code}",
-        str(err),
-        "--- git stderr ---",
-        _tail(err.stderr),
-        "--- git stdout ---",
-        _tail(err.stdout),
-    ]
-    body = "\n".join(parts)
+    body = format_git_failure_alert(
+        repo_name=repo_name,
+        branch=branch,
+        phase=phase,
+        exit_code=err.code,
+        err_message=str(err),
+        stderr=err.stderr,
+        stdout=err.stdout,
+        head_sha=head_sha,
+    )
 
     if not token or not chat_id:
         logger.error("git failure (Telegram not configured): %s", truncate_telegram_message(body, 2000))
@@ -146,14 +132,20 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         head = rev_parse_head(repo_path, git_env)
                     except GitError as e:
                         logger.error("git clone/setup failed for %s: %s", repo.name, e)
+                        head_hint: str | None = None
+                        if repo_path.exists():
+                            try:
+                                head_hint = rev_parse_head(repo_path, git_env)
+                            except GitError:
+                                pass
                         _notify_git_failure(
                             cfg,
                             limiter,
                             repo_name=repo.name,
                             branch=repo.branch,
-                            url=repo.url,
                             phase="clone",
                             err=e,
+                            head_sha=head_hint,
                         )
                         continue
                     logger.info("cloned %s at %s", repo.name, head)
@@ -166,7 +158,6 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                             limiter,
                             repo_name=repo.name,
                             branch=repo.branch,
-                            head_before=None,
                             head_after=head,
                             err=e,
                         )
@@ -183,14 +174,19 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         )
                 except GitError as e:
                     logger.error("git status failed for %s: %s", repo.name, e)
+                    head_hint: str | None = None
+                    try:
+                        head_hint = rev_parse_head(repo_path, git_env)
+                    except GitError:
+                        pass
                     _notify_git_failure(
                         cfg,
                         limiter,
                         repo_name=repo.name,
                         branch=repo.branch,
-                        url=repo.url,
                         phase="status",
                         err=e,
+                        head_sha=head_hint,
                     )
                     continue
 
@@ -203,7 +199,6 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         limiter,
                         repo_name=repo.name,
                         branch=repo.branch,
-                        url=repo.url,
                         phase="rev-parse(before)",
                         err=e,
                     )
@@ -218,9 +213,9 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         limiter,
                         repo_name=repo.name,
                         branch=repo.branch,
-                        url=repo.url,
                         phase="fetch/checkout/merge",
                         err=e,
+                        head_sha=head_before,
                     )
                     continue
 
@@ -233,9 +228,9 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         limiter,
                         repo_name=repo.name,
                         branch=repo.branch,
-                        url=repo.url,
                         phase="rev-parse(after)",
                         err=e,
+                        head_sha=head_before,
                     )
                     continue
 
@@ -254,7 +249,6 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         limiter,
                         repo_name=repo.name,
                         branch=repo.branch,
-                        head_before=last_ok,
                         head_after=head_after,
                         err=e,
                     )

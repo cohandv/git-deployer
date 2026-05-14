@@ -6,7 +6,7 @@ Git operations use the system **`git`** CLI. Remotes must be **SSH** (`git@host:
 
 ## What you need on each application repo
 
-- A **`start.sh`** at the repository root (tracked in Git).
+- A **`start.sh`** at the repository root (tracked in Git). It is executed with **`cwd`** set to that directory (the clone path), with **`PWD`** and **`GIT_DEPLOY_REPO_ROOT`** set to the same absolute path so scripts can rely on them.
 - The script should be **idempotent** when possible; the watcher may run it after every new revision.
 
 ## Configuration
@@ -279,9 +279,9 @@ sudo /usr/bin/python3 /opt/git-deploy-watcher/run_watcher.py --config /etc/git-d
 - **Clone** if `{base_path}/{name}` is missing (`git clone --branch … --single-branch`).
 - **Update** with `git fetch origin`, `git checkout <branch>`, `git merge --ff-only origin/<branch>` (non-fast-forward and other git failures are **logged and sent to Telegram**).
 - **Dirty tree**: logs a warning; does not invent a new revision.
-- **Deploy**: runs `/bin/bash start.sh` in the repo root when the current `HEAD` is not yet recorded as successfully deployed.
+- **Deploy**: runs `bash start.sh` with **working directory** = repo clone root (`{base_path}/{name}/`); environment includes **`GIT_DEPLOY_REPO_ROOT`** and **`PWD`** pointing at that directory.
 - **State**: after a **successful** `start.sh`, the current `HEAD` SHA is written to `state_file`. Failures keep the old entry so the next poll retries.
-- **Telegram**: on **`start.sh` non-zero** and on **git errors** (clone, `status`, `rev-parse`, fetch/checkout/merge); messages are truncated to Telegram’s length limit; **rate limit** is separate per repo for **git** vs **start.sh** (at most one of each kind per 5 minutes per repo).
+- **Telegram**: short mobile-friendly lines: **`[git] repo · branch`** / **`[deploy] repo · branch · sha`** plus phase / exit code and **one** trimmed error line; full logs stay in **journald**. Rate limit: separate **git** vs **start.sh** per repo (~5 min each).
 
 ## Development
 

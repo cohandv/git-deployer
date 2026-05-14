@@ -20,13 +20,20 @@ class StartScriptError(RuntimeError):
 
 
 def run_start_sh(repo: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
-    script = repo / "start.sh"
+    """Run ``start.sh`` with its **current working directory** set to the repo root (clone dir)."""
+    root = repo.resolve()
+    script = root / "start.sh"
     if not script.is_file():
-        raise StartScriptError(f"missing start.sh in {repo}")
+        raise StartScriptError(f"missing start.sh in {root}")
+    run_env = dict(env)
+    root_s = str(root)
+    run_env["PWD"] = root_s
+    run_env["GIT_DEPLOY_REPO_ROOT"] = root_s
+    # Relative script name + cwd=root guarantees the process runs inside the cloned tree.
     cp = subprocess.run(
-        ["/bin/bash", str(script)],
-        cwd=repo,
-        env=env,
+        ["/bin/bash", "start.sh"],
+        cwd=root_s,
+        env=run_env,
         capture_output=True,
         text=True,
         timeout=timeout,
