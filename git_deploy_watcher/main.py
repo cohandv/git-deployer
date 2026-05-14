@@ -5,12 +5,20 @@ import fcntl
 import logging
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 
 from git_deploy_watcher.config import AppConfig, build_git_env, load_config, telegram_credentials
 from git_deploy_watcher.deploy import StartScriptError, run_start_sh
-from git_deploy_watcher.git_ops import GitError, clone_repo, fetch_merge_ff, is_dirty, rev_parse_head
+from git_deploy_watcher.git_ops import (
+    GitError,
+    clean_repo_fdx,
+    clone_repo,
+    fetch_merge_ff,
+    is_dirty,
+    rev_parse_head,
+)
 from git_deploy_watcher.notify import (
     TelegramRateLimiter,
     format_git_failure_alert,
@@ -21,6 +29,40 @@ from git_deploy_watcher.notify import (
 from git_deploy_watcher.state import load_last_deployed, save_last_deployed
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DeployBackoffState:
+    """Per-repo exponential backoff after ``start.sh`` failures (in-process only).
+
+    Streak resets on successful deploy for that repo. A process restart clears all
+    entries because this object is not persisted.
+    """
+
+    _streak: dict[str, int] = field(default_factory=dict)
+    _next_try_monotonic: dict[str, float] = field(default_factory=dict)
+
+    def ready(self, repo: str) -> bool:
+        return time.monotonic() >= self._next_try_monotonic.get(repo, 0.0)
+
+    def wait_seconds(self, repo: str) -> float:
+        return max(0.0, self._next_try_monotonic.get(repo, 0.0) - time.monotonic())
+
+    def on_deploy_success(self, repo: str) -> None:
+        self._streak.pop(repo, None)
+        self._next_try_monotonic.pop(repo, None)
+
+    def on_deploy_failure(self, repo: str, *, initial: int, cap: int) -> float:
+        """Bump failure streak and schedule the next attempt; returns delay used (seconds)."""
+        s = self._streak.get(repo, 0) + 1
+        self._streak[repo] = s
+        raw = initial * (2 ** (s - 1))
+        delay = float(min(cap, raw))
+        self._next_try_monotonic[repo] = time.monotonic() + delay
+        return delay
+
+    def failure_streak(self, repo: str) -> int:
+        return self._streak.get(repo, 0)
 
 
 class RepoLock:
@@ -83,6 +125,45 @@ def _notify_start_sh_failure(
         logger.exception("failed to send Telegram alert for %s", repo_name)
 
 
+def _run_start_sh_with_retries(
+    *,
+    cfg: AppConfig,
+    repo_name: str,
+    repo_path: Path,
+    git_env: dict[str, str],
+) -> None:
+    """Run ``start.sh`` up to ``cfg.start_sh_failure_retry_attempts`` times with backoff.
+
+    On success after a prior failure in the same burst, logs at INFO. The outer poll
+    loop still retries on the next tick if state was not updated (deploy not marked ok).
+    """
+    attempts = cfg.start_sh_failure_retry_attempts
+    interval = cfg.start_sh_failure_retry_interval_seconds
+    last: StartScriptError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            run_start_sh(repo_path, git_env, cfg.start_sh_timeout_seconds)
+            if attempt > 1:
+                logger.info("start.sh succeeded for %s on attempt %d/%d", repo_name, attempt, attempts)
+            return
+        except StartScriptError as e:
+            last = e
+            if attempt >= attempts:
+                break
+            logger.warning(
+                "start.sh failed for %s (attempt %d/%d), retrying in %ds: %s",
+                repo_name,
+                attempt,
+                attempts,
+                interval,
+                e,
+            )
+            if interval > 0:
+                time.sleep(interval)
+    assert last is not None
+    raise last
+
+
 def _notify_git_failure(
     cfg: AppConfig,
     limiter: TelegramRateLimiter,
@@ -118,7 +199,13 @@ def _notify_git_failure(
         logger.exception("failed to send Telegram git alert for %s", repo_name)
 
 
-def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str], limiter: TelegramRateLimiter) -> None:
+def tick_repo(
+    cfg: AppConfig,
+    git_env: dict[str, str],
+    deployed: dict[str, str],
+    limiter: TelegramRateLimiter,
+    backoff: DeployBackoffState,
+) -> None:
     for repo in cfg.repos:
         lock_path = cfg.state_file.parent / "locks" / f"{repo.name}.lock"
         with RepoLock(lock_path):
@@ -149,10 +236,34 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         )
                         continue
                     logger.info("cloned %s at %s", repo.name, head)
+                    if not backoff.ready(repo.name):
+                        rem = int(backoff.wait_seconds(repo.name) + 0.999)
+                        logger.info(
+                            "skipping start.sh for %s after clone (backoff, ~%ds left)",
+                            repo.name,
+                            rem,
+                        )
+                        continue
                     try:
-                        run_start_sh(repo_path, git_env, cfg.start_sh_timeout_seconds)
+                        _run_start_sh_with_retries(
+                            cfg=cfg,
+                            repo_name=repo.name,
+                            repo_path=repo_path,
+                            git_env=git_env,
+                        )
                     except StartScriptError as e:
                         logger.error("start.sh failed after clone for %s: %s", repo.name, e)
+                        delay = backoff.on_deploy_failure(
+                            repo.name,
+                            initial=cfg.deploy_backoff_initial_seconds,
+                            cap=cfg.deploy_backoff_max_seconds,
+                        )
+                        logger.warning(
+                            "deploy backoff for %s after clone failure: next try in %.0fs (streak=%d)",
+                            repo.name,
+                            delay,
+                            backoff.failure_streak(repo.name),
+                        )
                         _notify_start_sh_failure(
                             cfg,
                             limiter,
@@ -162,16 +273,13 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                             err=e,
                         )
                         continue
+                    backoff.on_deploy_success(repo.name)
                     deployed[repo.name] = head
                     save_last_deployed(cfg.state_file, deployed)
                     continue
 
                 try:
-                    if is_dirty(repo_path, git_env):
-                        logger.warning(
-                            "repo %s has a dirty working tree; not treating as new revision",
-                            repo.name,
-                        )
+                    dirty = is_dirty(repo_path, git_env)
                 except GitError as e:
                     logger.error("git status failed for %s: %s", repo.name, e)
                     head_hint: str | None = None
@@ -189,6 +297,63 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                         head_sha=head_hint,
                     )
                     continue
+
+                if dirty:
+                    logger.info("repo %s has a dirty working tree; running git clean -fdx", repo.name)
+                    try:
+                        clean_repo_fdx(repo_path, git_env)
+                    except GitError as e:
+                        logger.error("git clean -fdx failed for %s: %s", repo.name, e)
+                        head_hint: str | None = None
+                        try:
+                            head_hint = rev_parse_head(repo_path, git_env)
+                        except GitError:
+                            pass
+                        _notify_git_failure(
+                            cfg,
+                            limiter,
+                            repo_name=repo.name,
+                            branch=repo.branch,
+                            phase="clean",
+                            err=e,
+                            head_sha=head_hint,
+                        )
+                        continue
+                    try:
+                        still_dirty = is_dirty(repo_path, git_env)
+                    except GitError as e:
+                        logger.error("git status failed for %s after clean: %s", repo.name, e)
+                        _notify_git_failure(
+                            cfg,
+                            limiter,
+                            repo_name=repo.name,
+                            branch=repo.branch,
+                            phase="status",
+                            err=e,
+                        )
+                        continue
+                    if still_dirty:
+                        logger.error(
+                            "repo %s still dirty after git clean -fdx (tracked changes or merge state); skipping pull",
+                            repo.name,
+                        )
+                        head_hint: str | None = None
+                        try:
+                            head_hint = rev_parse_head(repo_path, git_env)
+                        except GitError:
+                            pass
+                        _notify_git_failure(
+                            cfg,
+                            limiter,
+                            repo_name=repo.name,
+                            branch=repo.branch,
+                            phase="post-clean",
+                            err=GitError(
+                                "working tree still dirty after git clean -fdx (only removes untracked/ignored files)"
+                            ),
+                            head_sha=head_hint,
+                        )
+                        continue
 
                 try:
                     head_before = rev_parse_head(repo_path, git_env)
@@ -240,10 +405,35 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                 if last_ok is not None and head_after == last_ok:
                     continue
 
+                if not backoff.ready(repo.name):
+                    rem = int(backoff.wait_seconds(repo.name) + 0.999)
+                    logger.info(
+                        "skipping start.sh for %s (backoff, ~%ds left)",
+                        repo.name,
+                        rem,
+                    )
+                    continue
+
                 try:
-                    run_start_sh(repo_path, git_env, cfg.start_sh_timeout_seconds)
+                    _run_start_sh_with_retries(
+                        cfg=cfg,
+                        repo_name=repo.name,
+                        repo_path=repo_path,
+                        git_env=git_env,
+                    )
                 except StartScriptError as e:
                     logger.error("start.sh failed for %s: %s", repo.name, e)
+                    delay = backoff.on_deploy_failure(
+                        repo.name,
+                        initial=cfg.deploy_backoff_initial_seconds,
+                        cap=cfg.deploy_backoff_max_seconds,
+                    )
+                    logger.warning(
+                        "deploy backoff for %s: next try in %.0fs (streak=%d)",
+                        repo.name,
+                        delay,
+                        backoff.failure_streak(repo.name),
+                    )
                     _notify_start_sh_failure(
                         cfg,
                         limiter,
@@ -254,6 +444,7 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
                     )
                     continue
 
+                backoff.on_deploy_success(repo.name)
                 deployed[repo.name] = head_after
                 save_last_deployed(cfg.state_file, deployed)
                 logger.info("deployed %s at %s", repo.name, head_after)
@@ -264,10 +455,11 @@ def tick_repo(cfg: AppConfig, git_env: dict[str, str], deployed: dict[str, str],
 def run_loop(cfg: AppConfig) -> None:
     git_env = build_git_env(cfg)
     limiter = TelegramRateLimiter()
+    backoff = DeployBackoffState()
     while True:
         deployed = load_last_deployed(cfg.state_file)
         try:
-            tick_repo(cfg, git_env, deployed, limiter)
+            tick_repo(cfg, git_env, deployed, limiter, backoff)
         except Exception:
             logger.exception("tick failed")
         time.sleep(cfg.poll_interval_seconds)

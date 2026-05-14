@@ -17,6 +17,8 @@ _GIT_PHASE_LABEL: dict[str, str] = {
     "rev-parse(before)": "read HEAD",
     "fetch/checkout/merge": "pull / merge",
     "rev-parse(after)": "read HEAD",
+    "clean": "git clean -fdx",
+    "post-clean": "still dirty after clean",
 }
 
 

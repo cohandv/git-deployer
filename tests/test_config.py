@@ -20,6 +20,53 @@ def _write_config(path: Path, obj: dict) -> None:
 
 
 class TestLoadConfig(unittest.TestCase):
+    def test_start_sh_retry_defaults(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "repos": [{"url": "git@github.com:org/foo.git", "branch": "main"}],
+                },
+            )
+            cfg = load_config(p)
+            self.assertEqual(cfg.start_sh_failure_retry_attempts, 5)
+            self.assertEqual(cfg.start_sh_failure_retry_interval_seconds, 10)
+            self.assertEqual(cfg.deploy_backoff_initial_seconds, 10)
+            self.assertEqual(cfg.deploy_backoff_max_seconds, 300)
+
+    def test_start_sh_retry_custom(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "start_sh_failure_retry_attempts": 12,
+                    "start_sh_failure_retry_interval_seconds": 0,
+                    "repos": [{"url": "git@github.com:org/foo.git", "branch": "main"}],
+                },
+            )
+            cfg = load_config(p)
+            self.assertEqual(cfg.start_sh_failure_retry_attempts, 12)
+            self.assertEqual(cfg.start_sh_failure_retry_interval_seconds, 0)
+
+    def test_deploy_backoff_rejects_max_below_initial(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "deploy_backoff_initial_seconds": 60,
+                    "deploy_backoff_max_seconds": 30,
+                    "repos": [{"url": "git@github.com:org/foo.git", "branch": "main"}],
+                },
+            )
+            with self.assertRaises(ConfigError):
+                load_config(p)
+
     def test_accepts_scp_style_ssh(self) -> None:
         with TemporaryDirectory() as td:
             p = Path(td) / "c.json"
@@ -157,6 +204,10 @@ class TestLoadConfig(unittest.TestCase):
             poll_interval_seconds=60,
             state_file=Path("/tmp/state.json"),
             start_sh_timeout_seconds=60,
+            start_sh_failure_retry_attempts=1,
+            start_sh_failure_retry_interval_seconds=0,
+            deploy_backoff_initial_seconds=10,
+            deploy_backoff_max_seconds=300,
             ssh_identity_file=None,
             telegram=TelegramConfig(
                 bot_token="from-config",
@@ -223,6 +274,10 @@ class TestBuildGitEnv(unittest.TestCase):
                 poll_interval_seconds=60,
                 state_file=Path(td) / "state.json",
                 start_sh_timeout_seconds=60,
+                start_sh_failure_retry_attempts=1,
+                start_sh_failure_retry_interval_seconds=0,
+                deploy_backoff_initial_seconds=10,
+                deploy_backoff_max_seconds=300,
                 ssh_identity_file=key,
                 telegram=TelegramConfig(bot_token=None, chat_id=None, bot_token_env="T", chat_id_env="C"),
                 repos=(),
@@ -240,6 +295,10 @@ class TestBuildGitEnv(unittest.TestCase):
                 poll_interval_seconds=60,
                 state_file=Path(td) / "state.json",
                 start_sh_timeout_seconds=60,
+                start_sh_failure_retry_attempts=1,
+                start_sh_failure_retry_interval_seconds=0,
+                deploy_backoff_initial_seconds=10,
+                deploy_backoff_max_seconds=300,
                 ssh_identity_file=key,
                 telegram=TelegramConfig(bot_token=None, chat_id=None, bot_token_env="T", chat_id_env="C"),
                 repos=(),

@@ -58,6 +58,12 @@ def is_dirty(repo: Path, env: dict[str, str]) -> bool:
     return bool((cp.stdout or "").strip())
 
 
+def clean_repo_fdx(repo: Path, env: dict[str, str]) -> None:
+    """Remove untracked and ignored files so a deploy checkout can update."""
+    cp = _run_git(["clean", "-fdx"], cwd=repo, env=env)
+    _require_ok(cp, "git clean -fdx")
+
+
 def clone_repo(repo: Path, url: str, branch: str, env: dict[str, str]) -> None:
     repo.parent.mkdir(parents=True, exist_ok=True)
     cp = _run_git(

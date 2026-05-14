@@ -41,6 +41,10 @@ class AppConfig:
     poll_interval_seconds: int
     state_file: Path
     start_sh_timeout_seconds: int
+    start_sh_failure_retry_attempts: int
+    start_sh_failure_retry_interval_seconds: int
+    deploy_backoff_initial_seconds: int
+    deploy_backoff_max_seconds: int
     ssh_identity_file: Path | None
     telegram: TelegramConfig
     repos: tuple[RepoConfig, ...]
@@ -155,6 +159,24 @@ def load_config(path: Path) -> AppConfig:
     if not isinstance(timeout, int) or timeout < 1:
         raise ConfigError("start_sh_timeout_seconds must be an integer >= 1")
 
+    retry_attempts = data.get("start_sh_failure_retry_attempts", 5)
+    if not isinstance(retry_attempts, int) or retry_attempts < 1:
+        raise ConfigError("start_sh_failure_retry_attempts must be an integer >= 1")
+
+    retry_interval = data.get("start_sh_failure_retry_interval_seconds", 10)
+    if not isinstance(retry_interval, int) or retry_interval < 0:
+        raise ConfigError("start_sh_failure_retry_interval_seconds must be an integer >= 0")
+
+    backoff_initial = data.get("deploy_backoff_initial_seconds", 10)
+    if not isinstance(backoff_initial, int) or backoff_initial < 1:
+        raise ConfigError("deploy_backoff_initial_seconds must be an integer >= 1")
+
+    backoff_max = data.get("deploy_backoff_max_seconds", 300)
+    if not isinstance(backoff_max, int) or backoff_max < 1:
+        raise ConfigError("deploy_backoff_max_seconds must be an integer >= 1")
+    if backoff_max < backoff_initial:
+        raise ConfigError("deploy_backoff_max_seconds must be >= deploy_backoff_initial_seconds")
+
     ssh_identity: Path | None = None
     if "ssh_identity_file" in data and data["ssh_identity_file"] is not None:
         sif = data["ssh_identity_file"]
@@ -256,6 +278,10 @@ def load_config(path: Path) -> AppConfig:
         poll_interval_seconds=poll,
         state_file=state_file,
         start_sh_timeout_seconds=timeout,
+        start_sh_failure_retry_attempts=retry_attempts,
+        start_sh_failure_retry_interval_seconds=retry_interval,
+        deploy_backoff_initial_seconds=backoff_initial,
+        deploy_backoff_max_seconds=backoff_max,
         ssh_identity_file=ssh_identity,
         telegram=telegram,
         repos=tuple(repos),

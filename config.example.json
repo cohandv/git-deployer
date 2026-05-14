@@ -3,6 +3,10 @@
   "poll_interval_seconds": 60,
   "state_file": "/var/lib/git-deploy-watcher/state.json",
   "start_sh_timeout_seconds": 3600,
+  "start_sh_failure_retry_attempts": 5,
+  "start_sh_failure_retry_interval_seconds": 10,
+  "deploy_backoff_initial_seconds": 10,
+  "deploy_backoff_max_seconds": 300,
   "ssh_identity_file": "/etc/git-deployer/ssh/id_ed25519",
   "telegram": {
     "bot_token_env": "TELEGRAM_BOT_TOKEN",
