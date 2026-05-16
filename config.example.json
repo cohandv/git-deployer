@@ -16,7 +16,8 @@
     {
       "name": "api",
       "url": "git@github.com:org/api.git",
-      "branch": "main"
+      "branch": "main",
+      "ssh_identity_file": "/etc/git-deployer/ssh/id_repo_api_ed25519"
     }
   ]
 }

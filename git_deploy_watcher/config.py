@@ -33,6 +33,7 @@ class RepoConfig:
     name: str
     url: str
     branch: str
+    ssh_identity_file: Path | None
 
 
 @dataclass(frozen=True)
@@ -271,7 +272,15 @@ def load_config(path: Path) -> AppConfig:
         if name in seen_names:
             raise ConfigError(f"duplicate repo name: {name!r}")
         seen_names.add(name)
-        repos.append(RepoConfig(name=name, url=url, branch=branch))
+        repo_ssh: Path | None = None
+        if "ssh_identity_file" in item and item["ssh_identity_file"] is not None:
+            rs = item["ssh_identity_file"]
+            if not isinstance(rs, str) or not rs.strip():
+                raise ConfigError(
+                    f"repos[{i}].ssh_identity_file must be a non-empty string when set"
+                )
+            repo_ssh = Path(rs).expanduser()
+        repos.append(RepoConfig(name=name, url=url, branch=branch, ssh_identity_file=repo_ssh))
 
     return AppConfig(
         base_path=base,
@@ -288,20 +297,50 @@ def load_config(path: Path) -> AppConfig:
     )
 
 
-def build_git_env(config: AppConfig, parent: dict[str, str] | None = None) -> dict[str, str]:
-    """Merge parent env with GIT_SSH_COMMAND when ssh_identity_file is set.
+def build_git_env(
+    config: AppConfig,
+    *,
+    repo: RepoConfig | None = None,
+    parent: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Merge parent env with ``GIT_SSH_COMMAND`` from SSH identity file(s).
 
     If ``GIT_SSH_COMMAND`` is already set in ``parent``/``os.environ``, it wins
-    and ``ssh_identity_file`` is ignored (operators may set it in systemd
+    and configured keys are ignored (operators may set it in systemd
     ``EnvironmentFile``).
+
+    When ``repo`` is set and has ``ssh_identity_file``, that key is tried first,
+    then the global ``config.ssh_identity_file`` if set and not the same path
+    (OpenSSH offers keys in order until the server accepts one).
     """
     env = dict(os.environ if parent is None else parent)
     if env.get("GIT_SSH_COMMAND"):
         return env
-    if config.ssh_identity_file is None:
+
+    identity_paths: list[Path] = []
+    if repo is not None and repo.ssh_identity_file is not None:
+        identity_paths.append(repo.ssh_identity_file)
+    if config.ssh_identity_file is not None:
+        identity_paths.append(config.ssh_identity_file)
+
+    resolved_seen: set[str] = set()
+    unique_paths: list[Path] = []
+    for p in identity_paths:
+        try:
+            key = str(p.resolve())
+        except OSError:
+            key = str(p)
+        if key in resolved_seen:
+            continue
+        resolved_seen.add(key)
+        unique_paths.append(p)
+
+    if not unique_paths:
         return env
-    key = shlex.quote(str(config.ssh_identity_file))
-    env["GIT_SSH_COMMAND"] = (
-        f"ssh -i {key} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
-    )
+
+    parts: list[str] = ["ssh"]
+    for p in unique_paths:
+        parts.extend(["-i", shlex.quote(str(p))])
+    parts.extend(["-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new"])
+    env["GIT_SSH_COMMAND"] = " ".join(parts)
     return env

@@ -13,8 +13,8 @@ from git_deploy_watcher.config import AppConfig, build_git_env, load_config, tel
 from git_deploy_watcher.deploy import StartScriptError, run_start_sh
 from git_deploy_watcher.git_ops import (
     GitError,
-    clean_repo_fdx,
     clone_repo,
+    discard_local_changes,
     fetch_merge_ff,
     is_dirty,
     rev_parse_head,
@@ -231,12 +231,12 @@ def _notify_git_failure(
 
 def tick_repo(
     cfg: AppConfig,
-    git_env: dict[str, str],
     deployed: dict[str, str],
     limiter: TelegramRateLimiter,
     backoff: DeployBackoffState,
 ) -> None:
     for repo in cfg.repos:
+        git_env = build_git_env(cfg, repo=repo)
         lock_path = cfg.state_file.parent / "locks" / f"{repo.name}.lock"
         with RepoLock(lock_path):
             repo_path = cfg.base_path / repo.name
@@ -330,13 +330,14 @@ def tick_repo(
 
                 if dirty:
                     logger.info(
-                        "repo %s: working tree dirty; running git clean -fdx (normal cleanup, not a failure)",
+                        "repo %s: working tree dirty; discarding local changes "
+                        "(git clean -fdx, git reset --hard HEAD)",
                         repo.name,
                     )
                     try:
-                        clean_repo_fdx(repo_path, git_env)
+                        discard_local_changes(repo_path, git_env)
                     except GitError as e:
-                        logger.error("git clean -fdx failed for %s: %s", repo.name, e)
+                        logger.error("failed to reset working tree for %s: %s", repo.name, e)
                         head_hint: str | None = None
                         try:
                             head_hint = rev_parse_head(repo_path, git_env)
@@ -347,7 +348,7 @@ def tick_repo(
                             limiter,
                             repo_name=repo.name,
                             branch=repo.branch,
-                            phase="clean",
+                            phase="reset",
                             err=e,
                             head_sha=head_hint,
                         )
@@ -355,7 +356,7 @@ def tick_repo(
                     try:
                         still_dirty = is_dirty(repo_path, git_env)
                     except GitError as e:
-                        logger.error("git status failed for %s after clean: %s", repo.name, e)
+                        logger.error("git status failed for %s after reset: %s", repo.name, e)
                         _notify_git_failure(
                             cfg,
                             limiter,
@@ -367,7 +368,7 @@ def tick_repo(
                         continue
                     if still_dirty:
                         logger.error(
-                            "repo %s still dirty after git clean -fdx (tracked changes or merge state); skipping pull",
+                            "repo %s still dirty after clean -fdx and reset --hard; skipping pull",
                             repo.name,
                         )
                         head_hint: str | None = None
@@ -380,9 +381,9 @@ def tick_repo(
                             limiter,
                             repo_name=repo.name,
                             branch=repo.branch,
-                            phase="post-clean",
+                            phase="post-reset",
                             err=GitError(
-                                "working tree still dirty after git clean -fdx (only removes untracked/ignored files)"
+                                "working tree still dirty after git clean -fdx and git reset --hard HEAD"
                             ),
                             head_sha=head_hint,
                         )
@@ -506,13 +507,12 @@ def tick_repo(
 
 
 def run_loop(cfg: AppConfig) -> None:
-    git_env = build_git_env(cfg)
     limiter = TelegramRateLimiter()
     backoff = DeployBackoffState()
     while True:
         deployed = load_last_deployed(cfg.state_file)
         try:
-            tick_repo(cfg, git_env, deployed, limiter, backoff)
+            tick_repo(cfg, deployed, limiter, backoff)
         except Exception:
             logger.exception("tick failed")
         time.sleep(cfg.poll_interval_seconds)

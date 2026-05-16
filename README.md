@@ -20,13 +20,13 @@ Copy `[config.example.json](config.example.json)` to `/etc/git-deployer/config.j
 | `poll_interval_seconds`    | Sleep between full scans (default `60`).                                                                                                                       |
 | `state_file`               | JSON file storing last **successful** deploy SHA per repo.                                                                                                     |
 | `start_sh_timeout_seconds` | Timeout for `start.sh` in seconds (default `300`, five minutes).                                                                                               |
-| `ssh_identity_file`        | Optional path to a **private key** used for all `git` calls via `GIT_SSH_COMMAND`.                                                                             |
+| `ssh_identity_file`        | Optional default **private key** for all repos’ `git` SSH. Per-repo `repos[].ssh_identity_file` is offered first, then this key (duplicate paths are deduplicated). |
 | `telegram`                 | Optional object; see Telegram section below.                                                                                                                   |
 | `telegram.bot_token`       | Optional **literal** bot token in JSON. If set (non-empty), used instead of the env var named by `bot_token_env`.                                              |
 | `telegram.chat_id`         | Optional **literal** chat id (string or JSON integer). If set, used instead of the env var named by `chat_id_env`.                                             |
 | `telegram.bot_token_env`   | Env var name used **only when** `bot_token` is omitted. Must be a valid env name in that case (default `TELEGRAM_BOT_TOKEN`). Ignored when `bot_token` is set. |
 | `telegram.chat_id_env`     | Env var name used **only when** `chat_id` is omitted. Must be a valid env name then (default `TELEGRAM_CHAT_ID`). Ignored when `chat_id` is set.               |
-| `repos[]`                  | Each entry: `name` (optional), `url` (SSH only), `branch`.                                                                                                     |
+| `repos[]`                  | Each entry: `name` (optional), `url` (SSH only), `branch`, optional `ssh_identity_file` (repo-specific key; combined with global key for SSH).                |
 
 
 ### Telegram credentials
@@ -309,7 +309,7 @@ If `start.sh` runs **`systemctl restart git-deploy-watcher`** synchronously, sys
 
 - **Clone** if `{base_path}/{name}` is missing (`git clone --branch … --single-branch`).
 - **Update** with `git fetch origin`, `git checkout <branch>`, `git merge --ff-only origin/<branch>` (non-fast-forward and other git failures are **logged and sent to Telegram**).
-- **Dirty tree**: runs **`git clean -fdx`**, then continues; if still dirty (tracked edits), skips pull and alerts. Cleaning is normal housekeeping, not a deploy failure.
+- **Dirty tree**: discards all local changes with **`git clean -fdx`** and **`git reset --hard HEAD`** (aborts in-progress merge/rebase/cherry-pick when possible), then continues with fetch/merge. Modified and untracked files are **not** kept (no stash).
 - **Deploy**: runs `bash start.sh` with **working directory** = repo clone root (`{base_path}/{name}/`); environment includes **`GIT_DEPLOY_REPO_ROOT`** and **`PWD`** pointing at that directory.
 - **State**: after a **successful** `start.sh`, the current `HEAD` SHA is written to `state_file`. Failures keep the old entry so the next poll retries. If there is **no** entry for a repo yet and **no new commit** arrived this fetch, `start.sh` is skipped until you push or seed `state_file` (avoids loops when `start.sh` restarts the watcher before state is saved).
 - **Telegram**: short mobile-friendly lines: **`[git] repo · branch`** / **`[deploy] repo · branch · sha`** plus phase / exit code and **one** trimmed error line; full logs stay in **journald**. Rate limit: separate **git** vs **start.sh** per repo (~5 min each).

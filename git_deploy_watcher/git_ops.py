@@ -64,6 +64,29 @@ def clean_repo_fdx(repo: Path, env: dict[str, str]) -> None:
     _require_ok(cp, "git clean -fdx")
 
 
+def reset_repo_hard(repo: Path, env: dict[str, str]) -> None:
+    """Discard tracked changes; working tree matches ``HEAD``."""
+    cp = _run_git(["reset", "--hard", "HEAD"], cwd=repo, env=env)
+    _require_ok(cp, "git reset --hard HEAD")
+
+
+def _try_git_abort(repo: Path, env: dict[str, str], subcommand: str) -> None:
+    cp = _run_git([subcommand, "--abort"], cwd=repo, env=env)
+    if cp.returncode == 0:
+        logger.info("git %s --abort succeeded (cwd=%s)", subcommand, repo)
+
+
+def discard_local_changes(repo: Path, env: dict[str, str]) -> None:
+    """Make the clone match ``HEAD``: abort in-progress ops, clean untracked, hard reset.
+
+    All local modifications are discarded (not stashed).
+    """
+    for sub in ("merge", "rebase", "cherry-pick"):
+        _try_git_abort(repo, env, sub)
+    clean_repo_fdx(repo, env)
+    reset_repo_hard(repo, env)
+
+
 def clone_repo(repo: Path, url: str, branch: str, env: dict[str, str]) -> None:
     repo.parent.mkdir(parents=True, exist_ok=True)
     cp = _run_git(

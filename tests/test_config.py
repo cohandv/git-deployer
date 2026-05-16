@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -8,6 +9,7 @@ import unittest
 from git_deploy_watcher.config import (
     AppConfig,
     ConfigError,
+    RepoConfig,
     TelegramConfig,
     build_git_env,
     load_config,
@@ -68,6 +70,59 @@ class TestLoadConfig(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_config(p)
 
+    def test_repo_ssh_identity_builds_git_ssh_command_repo_key_first(self) -> None:
+        with TemporaryDirectory() as td:
+            k_default = Path(td) / "id_default"
+            k_repo = Path(td) / "id_repo"
+            k_default.write_text("k1", encoding="utf-8")
+            k_repo.write_text("k2", encoding="utf-8")
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "ssh_identity_file": str(k_default),
+                    "repos": [
+                        {
+                            "name": "r",
+                            "url": "git@github.com:org/r.git",
+                            "branch": "main",
+                            "ssh_identity_file": str(k_repo),
+                        }
+                    ],
+                },
+            )
+            cfg = load_config(p)
+            self.assertEqual(cfg.repos[0].ssh_identity_file, k_repo)
+            env = build_git_env(cfg, repo=cfg.repos[0], parent={})
+            cmd = env["GIT_SSH_COMMAND"]
+            q_repo = shlex.quote(str(k_repo))
+            q_def = shlex.quote(str(k_default))
+            self.assertIn(q_repo, cmd)
+            self.assertIn(q_def, cmd)
+            self.assertLess(cmd.index(q_repo), cmd.index(q_def))
+
+    def test_repo_ssh_identity_file_rejects_empty_string(self) -> None:
+        with TemporaryDirectory() as td:
+            p = Path(td) / "c.json"
+            _write_config(
+                p,
+                {
+                    "base_path": "/tmp/apps",
+                    "repos": [
+                        {
+                            "name": "r",
+                            "url": "git@github.com:org/r.git",
+                            "branch": "main",
+                            "ssh_identity_file": "  ",
+                        }
+                    ],
+                },
+            )
+            with self.assertRaises(ConfigError) as ctx:
+                load_config(p)
+            self.assertIn("ssh_identity_file", str(ctx.exception))
+
     def test_accepts_scp_style_ssh(self) -> None:
         with TemporaryDirectory() as td:
             p = Path(td) / "c.json"
@@ -81,6 +136,7 @@ class TestLoadConfig(unittest.TestCase):
             cfg = load_config(p)
             self.assertEqual(cfg.repos[0].name, "foo")
             self.assertEqual(cfg.repos[0].url, "git@github.com:org/foo.git")
+            self.assertIsNone(cfg.repos[0].ssh_identity_file)
 
     def test_accepts_ssh_url_form(self) -> None:
         with TemporaryDirectory() as td:
@@ -306,6 +362,32 @@ class TestBuildGitEnv(unittest.TestCase):
             )
             env = build_git_env(cfg, parent={"GIT_SSH_COMMAND": "ssh -i /already"})
             self.assertEqual(env["GIT_SSH_COMMAND"], "ssh -i /already")
+
+    def test_repo_and_global_same_path_single_minus_i(self) -> None:
+        with TemporaryDirectory() as td:
+            key = Path(td) / "shared"
+            key.write_text("x", encoding="utf-8")
+            cfg = AppConfig(
+                base_path=Path("/tmp"),
+                poll_interval_seconds=60,
+                state_file=Path(td) / "state.json",
+                start_sh_timeout_seconds=60,
+                start_sh_failure_retry_attempts=1,
+                start_sh_failure_retry_interval_seconds=0,
+                deploy_backoff_initial_seconds=10,
+                deploy_backoff_max_seconds=300,
+                ssh_identity_file=key,
+                telegram=TelegramConfig(bot_token=None, chat_id=None, bot_token_env="T", chat_id_env="C"),
+                repos=(),
+            )
+            repo = RepoConfig(
+                name="a",
+                url="git@github.com:org/a.git",
+                branch="main",
+                ssh_identity_file=key,
+            )
+            env = build_git_env(cfg, repo=repo, parent={})
+            self.assertEqual(env["GIT_SSH_COMMAND"].count("-i "), 1)
 
 
 if __name__ == "__main__":
