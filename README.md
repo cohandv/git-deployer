@@ -16,18 +16,56 @@ Copy `[config.example.json](config.example.json)` to `/etc/git-deployer/config.j
 
 | Field                      | Meaning                                                                                                                                                        |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config_version`           | Schema version (current: `2`). Omitted files are treated as v1 and migrated automatically.                                                                    |
 | `base_path`                | Parent directory for checkouts (`{base_path}/{name}/`).                                                                                                        |
 | `poll_interval_seconds`    | Sleep between full scans (default `60`).                                                                                                                       |
 | `state_file`               | JSON file storing last **successful** deploy SHA per repo.                                                                                                     |
 | `start_sh_timeout_seconds` | Timeout for `start.sh` in seconds (default `300`, five minutes).                                                                                               |
+| `start_sh_env`             | Optional object of env vars passed to every repo’s `start.sh` (values are strings). Per-repo `repos[].env` overrides these.                                  |
 | `ssh_identity_file`        | Optional default **private key** for all repos’ `git` SSH. Per-repo `repos[].ssh_identity_file` is offered first, then this key (duplicate paths are deduplicated). |
 | `telegram`                 | Optional object; see Telegram section below.                                                                                                                   |
 | `telegram.bot_token`       | Optional **literal** bot token in JSON. If set (non-empty), used instead of the env var named by `bot_token_env`.                                              |
 | `telegram.chat_id`         | Optional **literal** chat id (string or JSON integer). If set, used instead of the env var named by `chat_id_env`.                                             |
 | `telegram.bot_token_env`   | Env var name used **only when** `bot_token` is omitted. Must be a valid env name in that case (default `TELEGRAM_BOT_TOKEN`). Ignored when `bot_token` is set. |
 | `telegram.chat_id_env`     | Env var name used **only when** `chat_id` is omitted. Must be a valid env name then (default `TELEGRAM_CHAT_ID`). Ignored when `chat_id` is set.               |
-| `repos[]`                  | Each entry: `name` (optional), `url` (SSH only), `branch`, optional `ssh_identity_file` (repo-specific key; combined with global key for SSH).                |
+| `repos[]`                  | Each entry: `name` (optional), `url` (SSH only), `branch`, optional `ssh_identity_file`, optional `env` (object of strings for `start.sh`).                 |
 
+The watcher **re-reads `config.json` every poll iteration**. Invalid JSON or schema errors do **not** crash the process: the last good config keeps running and a **Telegram** alert is sent (rate-limited). Use `--strict-startup` to exit immediately on a bad config at startup (systemd fail-fast).
+
+### Config admin UI
+
+An optional **unauthenticated** web UI edits config via forms (no hand-written JSON). Enable it on the same process:
+
+```text
+ExecStart=…/run_watcher.py --config /etc/git-deployer/config.json --admin-bind 127.0.0.1:8765
+```
+
+Open `http://127.0.0.1:8765/` (SSH tunnel for remote access). The UI validates input, writes canonical JSON, and archives the previous file under `{config_dir}/config.history/` (last 50 snapshots). Use the **History & diff** tab to compare versions.
+
+**Security:** bind to localhost only unless you put a reverse proxy with auth in front. Anyone who can reach the port can change deploy targets and env vars.
+
+### `start.sh` environment
+
+Variables merged into `start.sh` (later wins except watcher-injected):
+
+1. Process environment (systemd `EnvironmentFile`, etc.)
+2. `start_sh_env` (global)
+3. `repos[].env` (per repo)
+4. `GIT_SSH_COMMAND` from SSH identity settings
+5. `PWD` and `GIT_DEPLOY_REPO_ROOT` (always set by the watcher; cannot be overridden via config)
+
+Example:
+
+```json
+"start_sh_env": { "LOG_LEVEL": "info" },
+"repos": [{ "name": "api", "env": { "PORT": "8080" }, … }]
+```
+
+### Config versioning and history
+
+- v1 configs (no `config_version`) upgrade to v2 on load (adds `start_sh_env`, `repos[].env` defaults).
+- Each save via the admin UI copies the previous file to `config.history/YYYYMMDDTHHMMSSZ.json`.
+- Renaming a repo in config treats it as a **new** repo; the old checkout and state entry are left in place.
 
 ### Telegram credentials
 
@@ -310,7 +348,8 @@ If `start.sh` runs **`systemctl restart git-deploy-watcher`** synchronously, sys
 - **Clone** if `{base_path}/{name}` is missing (`git clone --branch … --single-branch`).
 - **Update** with `git fetch origin`, `git checkout <branch>`, `git merge --ff-only origin/<branch>` (non-fast-forward and other git failures are **logged and sent to Telegram**).
 - **Dirty tree**: discards all local changes with **`git clean -fdx`** and **`git reset --hard HEAD`** (aborts in-progress merge/rebase/cherry-pick when possible), then continues with fetch/merge. Modified and untracked files are **not** kept (no stash).
-- **Deploy**: runs `bash start.sh` with **working directory** = repo clone root (`{base_path}/{name}/`); environment includes **`GIT_DEPLOY_REPO_ROOT`** and **`PWD`** pointing at that directory.
+- **Deploy**: runs `bash start.sh` with **working directory** = repo clone root (`{base_path}/{name}/`); environment includes **`GIT_DEPLOY_REPO_ROOT`**, **`PWD`**, optional **`start_sh_env`** / **`repos[].env`**, and **`GIT_SSH_COMMAND`** when configured.
+- **Config**: reloaded every poll; invalid config keeps the previous settings and sends Telegram **`[config]`** alerts.
 - **State**: after a **successful** `start.sh`, the current `HEAD` SHA is written to `state_file`. Failures keep the old entry so the next poll retries. If there is **no** entry for a repo yet and **no new commit** arrived this fetch, `start.sh` is skipped until you push or seed `state_file` (avoids loops when `start.sh` restarts the watcher before state is saved).
 - **Telegram**: short mobile-friendly lines: **`[git] repo · branch`** / **`[deploy] repo · branch · sha`** plus phase / exit code and **one** trimmed error line; full logs stay in **journald**. Rate limit: separate **git** vs **start.sh** per repo (~5 min each).
 

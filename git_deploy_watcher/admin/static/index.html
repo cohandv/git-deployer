@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>git-deploy-watcher config</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>git-deploy-watcher</h1>
+    <p class="subtitle">Configuration editor — changes reload automatically each poll</p>
+  </header>
+
+  <nav class="tabs">
+    <button type="button" class="tab active" data-tab="editor">Editor</button>
+    <button type="button" class="tab" data-tab="history">History &amp; diff</button>
+  </nav>
+
+  <div id="status" class="status hidden"></div>
+  <div id="validation-errors" class="errors hidden"></div>
+
+  <section id="panel-editor" class="panel">
+    <form id="config-form">
+      <fieldset>
+        <legend>Global</legend>
+        <label>Base path <input name="base_path" required></label>
+        <label>Poll interval (s) <input name="poll_interval_seconds" type="number" min="1"></label>
+        <label>State file <input name="state_file"></label>
+        <label>start.sh timeout (s) <input name="start_sh_timeout_seconds" type="number" min="1"></label>
+        <label>Retry attempts <input name="start_sh_failure_retry_attempts" type="number" min="1"></label>
+        <label>Retry interval (s) <input name="start_sh_failure_retry_interval_seconds" type="number" min="0"></label>
+        <label>Backoff initial (s) <input name="deploy_backoff_initial_seconds" type="number" min="1"></label>
+        <label>Backoff max (s) <input name="deploy_backoff_max_seconds" type="number" min="1"></label>
+        <label>SSH identity file <input name="ssh_identity_file" placeholder="optional"></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Global start.sh environment</legend>
+        <div id="start-sh-env" class="kv-table"></div>
+        <button type="button" class="secondary" id="add-global-env">Add variable</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Telegram</legend>
+        <label>Bot token (inline) <input name="telegram_bot_token" type="password" placeholder="leave blank to keep"></label>
+        <label>Chat ID <input name="telegram_chat_id"></label>
+        <label>Bot token env <input name="telegram_bot_token_env"></label>
+        <label>Chat ID env <input name="telegram_chat_id_env"></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Repositories</legend>
+        <div id="repos"></div>
+        <button type="button" class="secondary" id="add-repo">Add repository</button>
+      </fieldset>
+
+      <div class="actions">
+        <button type="submit" class="primary">Save config</button>
+        <button type="button" class="secondary" id="reload-btn">Reload from disk</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="panel-history" class="panel hidden">
+    <div class="history-controls">
+      <label>From
+        <select id="diff-from"></select>
+      </label>
+      <label>To
+        <select id="diff-to"></select>
+      </label>
+      <button type="button" class="secondary" id="run-diff">Show diff</button>
+    </div>
+    <pre id="diff-output" class="diff"></pre>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

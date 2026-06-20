@@ -69,6 +69,19 @@ def format_git_failure_alert(
     return "\n".join(lines)
 
 
+def format_config_failure_alert(*, err_message: str, has_stale_config: bool) -> str:
+    hint = _first_meaningful_line(err_message, limit=300)
+    head = "[config] invalid config.json"
+    if has_stale_config:
+        mid = "using previous config until fixed"
+    else:
+        mid = "no valid config loaded yet"
+    lines = [head, mid]
+    if hint:
+        lines.append(hint)
+    return "\n".join(lines)
+
+
 def format_start_failure_alert(
     *,
     repo_name: str,

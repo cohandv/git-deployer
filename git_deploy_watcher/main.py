@@ -9,7 +9,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 
-from git_deploy_watcher.config import AppConfig, build_git_env, load_config, telegram_credentials
+from git_deploy_watcher.config import (
+    AppConfig,
+    ConfigError,
+    build_git_env,
+    build_start_sh_env,
+    config_fingerprint,
+    load_config,
+    summarize_config_diff,
+    telegram_credentials,
+)
 from git_deploy_watcher.deploy import StartScriptError, run_start_sh
 from git_deploy_watcher.git_ops import (
     GitError,
@@ -21,6 +30,7 @@ from git_deploy_watcher.git_ops import (
 )
 from git_deploy_watcher.notify import (
     TelegramRateLimiter,
+    format_config_failure_alert,
     format_git_failure_alert,
     format_start_failure_alert,
     send_telegram_message,
@@ -30,7 +40,6 @@ from git_deploy_watcher.state import load_last_deployed, save_last_deployed
 
 logger = logging.getLogger(__name__)
 
-# Avoid huge journal lines if a script is very chatty.
 _START_SH_LOG_MAX_CHARS = 65536
 
 
@@ -41,7 +50,6 @@ def _log_start_sh_streams(
     *,
     failed: bool,
 ) -> None:
-    """Log captured ``start.sh`` stdout/stderr (truncated if extremely long)."""
     log = logger.error if failed else logger.info
     has_out = bool((stdout or "").strip())
     has_err = bool((stderr or "").strip())
@@ -61,12 +69,6 @@ def _log_start_sh_streams(
 
 @dataclass
 class DeployBackoffState:
-    """Per-repo exponential backoff after ``start.sh`` failures (in-process only).
-
-    Streak resets on successful deploy for that repo. A process restart clears all
-    entries because this object is not persisted.
-    """
-
     _streak: dict[str, int] = field(default_factory=dict)
     _next_try_monotonic: dict[str, float] = field(default_factory=dict)
 
@@ -81,7 +83,6 @@ class DeployBackoffState:
         self._next_try_monotonic.pop(repo, None)
 
     def on_deploy_failure(self, repo: str, *, initial: int, cap: int) -> float:
-        """Bump failure streak and schedule the next attempt; returns delay used (seconds)."""
         s = self._streak.get(repo, 0) + 1
         self._streak[repo] = s
         raw = initial * (2 ** (s - 1))
@@ -118,6 +119,26 @@ class RepoLock:
 
 def _telegram_env(cfg: AppConfig) -> tuple[str | None, str | None]:
     return telegram_credentials(cfg)
+
+
+def _notify_config_failure(
+    cfg: AppConfig | None,
+    limiter: TelegramRateLimiter,
+    err: ConfigError,
+) -> None:
+    token, chat_id = _telegram_env(cfg) if cfg else (None, None)
+    body = format_config_failure_alert(err_message=str(err), has_stale_config=cfg is not None)
+    if not token or not chat_id:
+        logger.error("config error (Telegram not configured): %s", truncate_telegram_message(body, 2000))
+        return
+    rate_key = "__config__"
+    if not limiter.allow(rate_key):
+        logger.warning("suppressed Telegram for %s (rate limit)", rate_key)
+        return
+    try:
+        send_telegram_message(bot_token=token, chat_id=chat_id, text=body)
+    except Exception:
+        logger.exception("failed to send Telegram config alert")
 
 
 def _notify_start_sh_failure(
@@ -158,19 +179,14 @@ def _run_start_sh_with_retries(
     cfg: AppConfig,
     repo_name: str,
     repo_path: Path,
-    git_env: dict[str, str],
+    start_env: dict[str, str],
 ) -> None:
-    """Run ``start.sh`` up to ``cfg.start_sh_failure_retry_attempts`` times with backoff.
-
-    On success after a prior failure in the same burst, logs at INFO. The outer poll
-    loop still retries on the next tick if state was not updated (deploy not marked ok).
-    """
     attempts = cfg.start_sh_failure_retry_attempts
     interval = cfg.start_sh_failure_retry_interval_seconds
     last: StartScriptError | None = None
     for attempt in range(1, attempts + 1):
         try:
-            cp = run_start_sh(repo_path, git_env, cfg.start_sh_timeout_seconds)
+            cp = run_start_sh(repo_path, start_env, cfg.start_sh_timeout_seconds)
             _log_start_sh_streams(repo_name, cp.stdout or "", cp.stderr or "", failed=False)
             if attempt > 1:
                 logger.info("start.sh succeeded for %s on attempt %d/%d", repo_name, attempt, attempts)
@@ -237,6 +253,7 @@ def tick_repo(
 ) -> None:
     for repo in cfg.repos:
         git_env = build_git_env(cfg, repo=repo)
+        start_env = build_start_sh_env(cfg, repo)
         lock_path = cfg.state_file.parent / "locks" / f"{repo.name}.lock"
         with RepoLock(lock_path):
             repo_path = cfg.base_path / repo.name
@@ -279,7 +296,7 @@ def tick_repo(
                             cfg=cfg,
                             repo_name=repo.name,
                             repo_path=repo_path,
-                            git_env=git_env,
+                            start_env=start_env,
                         )
                     except StartScriptError as e:
                         logger.error("start.sh failed after clone for %s: %s", repo.name, e)
@@ -439,9 +456,6 @@ def tick_repo(
                 if last_ok is not None and head_after == last_ok:
                     continue
 
-                # Avoid running start.sh every poll when no commit advanced: state_file may never
-                # get updated if start.sh restarts this service (process dies before save). Still
-                # run when we are retrying after start.sh failure (backoff streak > 0 or waiting).
                 if (
                     last_ok is None
                     and head_after == head_before
@@ -473,7 +487,7 @@ def tick_repo(
                         cfg=cfg,
                         repo_name=repo.name,
                         repo_path=repo_path,
-                        git_env=git_env,
+                        start_env=start_env,
                     )
                 except StartScriptError as e:
                     logger.error("start.sh failed for %s: %s", repo.name, e)
@@ -506,21 +520,68 @@ def tick_repo(
                 logger.exception("OS error for %s: %s", repo.name, e)
 
 
-def run_loop(cfg: AppConfig) -> None:
+def run_loop(config_path: Path) -> None:
     limiter = TelegramRateLimiter()
     backoff = DeployBackoffState()
+    cfg: AppConfig | None = None
+    fingerprint: str | None = None
+
     while True:
+        poll_sleep = cfg.poll_interval_seconds if cfg else 60
+        try:
+            new_cfg = load_config(config_path)
+            new_fp = config_fingerprint(new_cfg)
+            if cfg is None:
+                logger.info("config loaded (%d repos)", len(new_cfg.repos))
+            elif new_fp != fingerprint:
+                logger.info("config reloaded: %s", summarize_config_diff(cfg, new_cfg))
+            cfg = new_cfg
+            fingerprint = new_fp
+            cfg.base_path.mkdir(parents=True, exist_ok=True)
+        except ConfigError as e:
+            logger.error("config reload failed: %s", e)
+            _notify_config_failure(cfg, limiter, e)
+            if cfg is None:
+                time.sleep(poll_sleep)
+                continue
+
         deployed = load_last_deployed(cfg.state_file)
         try:
             tick_repo(cfg, deployed, limiter, backoff)
         except Exception:
             logger.exception("tick failed")
-        time.sleep(cfg.poll_interval_seconds)
+        time.sleep(poll_sleep)
+
+
+def _parse_admin_bind(value: str) -> tuple[str, int]:
+    if ":" not in value:
+        raise argparse.ArgumentTypeError("admin bind must be HOST:PORT")
+    host, _, port_s = value.rpartition(":")
+    if not host.strip():
+        raise argparse.ArgumentTypeError("admin bind host must not be empty")
+    try:
+        port = int(port_s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"invalid admin port: {port_s}") from e
+    if port < 1 or port > 65535:
+        raise argparse.ArgumentTypeError("admin port must be 1–65535")
+    return host.strip(), port
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Poll git repos and run start.sh on changes.")
     parser.add_argument("--config", required=True, type=Path, help="Path to config.json")
+    parser.add_argument(
+        "--admin-bind",
+        type=_parse_admin_bind,
+        default=None,
+        help="Optional HOST:PORT for config admin UI (e.g. 127.0.0.1:8765)",
+    )
+    parser.add_argument(
+        "--strict-startup",
+        action="store_true",
+        help="Exit with code 2 if config is invalid at startup (default: keep running)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -529,12 +590,19 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stdout,
     )
 
-    try:
-        cfg = load_config(args.config)
-    except Exception as e:
-        logger.error("invalid config: %s", e)
-        return 2
+    if args.strict_startup:
+        try:
+            load_config(args.config)
+        except ConfigError as e:
+            logger.error("invalid config: %s", e)
+            return 2
 
-    cfg.base_path.mkdir(parents=True, exist_ok=True)
-    run_loop(cfg)
+    if args.admin_bind:
+        from git_deploy_watcher.admin.server import start_admin_server
+
+        host, port = args.admin_bind
+        start_admin_server(args.config, host=host, port=port)
+        logger.info("admin UI listening on http://%s:%d", host, port)
+
+    run_loop(args.config)
     return 0

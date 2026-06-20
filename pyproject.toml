@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []
 
+[tool.setuptools.package-data]
+git_deploy_watcher = ["admin/static/*"]
+
 [project.scripts]
 git-deploy-watcher = "git_deploy_watcher.main:main"
 
