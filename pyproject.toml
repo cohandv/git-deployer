@@ -15,6 +15,7 @@ git_deploy_watcher = ["admin/static/*"]
 
 [project.scripts]
 git-deploy-watcher = "git_deploy_watcher.main:main"
+git-deploy-admin = "git_deploy_watcher.admin_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -44,6 +44,30 @@ Open `http://127.0.0.1:8765/` (SSH tunnel for remote access). The UI validates i
 
 **Security:** bind to localhost only unless you put a reverse proxy with auth in front. Anyone who can reach the port can change deploy targets and env vars.
 
+### Immediate deploy (pull + start.sh)
+
+From the **Repositories** tab:
+
+- **Deploy now** — queue pull + `start.sh` for a repo already in saved config (runs within ~1 second, bypasses poll wait).
+- **Save & deploy** — save the form, then queue deploy for that repo.
+- **Deploy all repos after save** — checkbox on the save bar.
+
+CLI (same machine, file-based trigger — no admin HTTP required):
+
+```bash
+git-deploy-admin --config /etc/git-deployer/config.json deploy api
+git-deploy-admin apply -f config.json --deploy api
+```
+
+Via running admin HTTP server:
+
+```bash
+git-deploy-admin --api-url http://127.0.0.1:8765 deploy api
+git-deploy-admin api post --url http://127.0.0.1:8765 -f config.json --deploy api
+```
+
+Other CLI commands: `show`, `validate`, `history list`, `history diff --from ID --to current`, `api get --url …`.
+
 ### `start.sh` environment
 
 Variables merged into `start.sh` (later wins except watcher-injected):

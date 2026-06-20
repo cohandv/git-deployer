@@ -40,12 +40,14 @@ class TestAdminAPI(unittest.TestCase):
         self._td = TemporaryDirectory()
         self.addCleanup(self._td.cleanup)
         self.config_path = Path(self._td.name) / "config.json"
+        self.state_file = Path(self._td.name) / "state.json"
         _write_config(
             self.config_path,
             {
                 "config_version": 2,
                 "base_path": "/tmp/apps",
-                "repos": [{"url": "git@github.com:org/foo.git", "branch": "main"}],
+                "state_file": str(self.state_file),
+                "repos": [{"name": "api", "url": "git@github.com:org/api.git", "branch": "main"}],
             },
         )
         self.server = start_admin_server(self.config_path, host="127.0.0.1", port=0)
@@ -86,6 +88,30 @@ class TestAdminAPI(unittest.TestCase):
         self.assertEqual(on_disk["poll_interval_seconds"], 45)
         history = _get_json(f"{self.base}/api/history")
         self.assertGreaterEqual(len(history["history"]), 1)
+
+    def test_post_repo_deploy(self) -> None:
+        status, data = _post_json(f"{self.base}/api/repos/api/deploy", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["deploy_queued"], ["api"])
+
+    def test_post_repo_deploy_unknown(self) -> None:
+        status, data = _post_json(f"{self.base}/api/repos/missing/deploy", {})
+        self.assertEqual(status, 400)
+        self.assertFalse(data["ok"])
+
+    def test_post_config_with_deploy_query(self) -> None:
+        body = {
+            "config_version": 2,
+            "base_path": "/var/deploy/apps",
+            "state_file": str(self.state_file),
+            "repos": [{"name": "api", "url": "git@github.com:org/api.git", "branch": "main"}],
+        }
+        url = f"{self.base}/api/config?deploy=api"
+        status, data = _post_json(url, body)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data.get("deploy_queued"), ["api"])
 
 
 if __name__ == "__main__":

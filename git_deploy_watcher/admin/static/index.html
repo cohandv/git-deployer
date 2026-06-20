@@ -12,57 +12,79 @@
     <p class="subtitle">Configuration editor — changes reload automatically each poll</p>
   </header>
 
-  <nav class="tabs">
-    <button type="button" class="tab active" data-tab="editor">Editor</button>
-    <button type="button" class="tab" data-tab="history">History &amp; diff</button>
+  <nav class="tabs" id="main-tabs">
+    <button type="button" class="tab active" data-tab="general">General</button>
+    <button type="button" class="tab" data-tab="deploy">Deploy</button>
+    <button type="button" class="tab" data-tab="telegram">Telegram</button>
+    <button type="button" class="tab" data-tab="repos">Repositories</button>
+    <button type="button" class="tab" data-tab="environment">Environment</button>
+    <button type="button" class="tab" data-tab="history">History</button>
   </nav>
 
   <div id="status" class="status hidden"></div>
   <div id="validation-errors" class="errors hidden"></div>
 
-  <section id="panel-editor" class="panel">
-    <form id="config-form">
-      <fieldset>
-        <legend>Global</legend>
-        <label>Base path <input name="base_path" required></label>
-        <label>Poll interval (s) <input name="poll_interval_seconds" type="number" min="1"></label>
-        <label>State file <input name="state_file"></label>
-        <label>start.sh timeout (s) <input name="start_sh_timeout_seconds" type="number" min="1"></label>
-        <label>Retry attempts <input name="start_sh_failure_retry_attempts" type="number" min="1"></label>
-        <label>Retry interval (s) <input name="start_sh_failure_retry_interval_seconds" type="number" min="0"></label>
-        <label>Backoff initial (s) <input name="deploy_backoff_initial_seconds" type="number" min="1"></label>
-        <label>Backoff max (s) <input name="deploy_backoff_max_seconds" type="number" min="1"></label>
-        <label>SSH identity file <input name="ssh_identity_file" placeholder="optional"></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>Global start.sh environment</legend>
-        <div id="start-sh-env" class="kv-table"></div>
-        <button type="button" class="secondary" id="add-global-env">Add variable</button>
-      </fieldset>
-
-      <fieldset>
-        <legend>Telegram</legend>
-        <label>Bot token (inline) <input name="telegram_bot_token" type="password" placeholder="leave blank to keep"></label>
-        <label>Chat ID <input name="telegram_chat_id"></label>
-        <label>Bot token env <input name="telegram_bot_token_env"></label>
-        <label>Chat ID env <input name="telegram_chat_id_env"></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>Repositories</legend>
-        <div id="repos"></div>
-        <button type="button" class="secondary" id="add-repo">Add repository</button>
-      </fieldset>
-
-      <div class="actions">
-        <button type="submit" class="primary">Save config</button>
-        <button type="button" class="secondary" id="reload-btn">Reload from disk</button>
+  <form id="config-form">
+    <section id="panel-general" class="panel editor-panel">
+      <p class="panel-desc">Paths, polling, and default SSH key for git operations.</p>
+      <div class="field-grid">
+        <label>Base path <input name="base_path" required placeholder="/var/deploy/apps"></label>
+        <label>State file <input name="state_file" placeholder="/var/lib/git-deploy-watcher/state.json"></label>
+        <label>Poll interval (seconds) <input name="poll_interval_seconds" type="number" min="1"></label>
+        <label>SSH identity file <input name="ssh_identity_file" placeholder="optional global deploy key"></label>
       </div>
-    </form>
-  </section>
+    </section>
+
+    <section id="panel-deploy" class="panel editor-panel hidden">
+      <p class="panel-desc">Timeouts, retries, and backoff after <code>start.sh</code> failures.</p>
+      <div class="field-grid">
+        <label>start.sh timeout (seconds) <input name="start_sh_timeout_seconds" type="number" min="1"></label>
+        <label>Retry attempts <input name="start_sh_failure_retry_attempts" type="number" min="1"></label>
+        <label>Retry interval (seconds) <input name="start_sh_failure_retry_interval_seconds" type="number" min="0"></label>
+        <label>Backoff initial (seconds) <input name="deploy_backoff_initial_seconds" type="number" min="1"></label>
+        <label>Backoff max (seconds) <input name="deploy_backoff_max_seconds" type="number" min="1"></label>
+      </div>
+    </section>
+
+    <section id="panel-telegram" class="panel editor-panel hidden">
+      <p class="panel-desc">Alerts for git and deploy failures. Inline values override env vars.</p>
+      <div class="field-grid single-col">
+        <label>Bot token (inline)
+          <input name="telegram_bot_token" type="password" placeholder="leave blank to keep existing">
+        </label>
+        <label>Chat ID
+          <input name="telegram_chat_id" placeholder="numeric or string">
+        </label>
+        <label>Bot token env var
+          <input name="telegram_bot_token_env" placeholder="TELEGRAM_BOT_TOKEN">
+        </label>
+        <label>Chat ID env var
+          <input name="telegram_chat_id_env" placeholder="TELEGRAM_CHAT_ID">
+        </label>
+      </div>
+    </section>
+
+    <section id="panel-repos" class="panel editor-panel hidden">
+      <p class="panel-desc">SSH remotes to watch. Each repo runs its own <code>start.sh</code> on new commits.</p>
+      <div id="repos"></div>
+      <button type="button" class="secondary" id="add-repo">Add repository</button>
+    </section>
+
+    <section id="panel-environment" class="panel editor-panel hidden">
+      <p class="panel-desc">Variables merged into every repo’s <code>start.sh</code>. Per-repo env overrides these.</p>
+      <div id="start-sh-env" class="kv-table"></div>
+      <button type="button" class="secondary" id="add-global-env">Add variable</button>
+    </section>
+
+    <div id="editor-actions" class="actions sticky-actions">
+      <label class="deploy-all-check"><input type="checkbox" id="deploy-all-after-save"> Deploy all repos after save</label>
+      <button type="submit" class="primary">Save config</button>
+      <button type="button" class="secondary" id="reload-btn">Reload from disk</button>
+    </div>
+  </form>
 
   <section id="panel-history" class="panel hidden">
+    <p class="panel-desc">Compare saved snapshots from <code>config.history/</code>.</p>
     <div class="history-controls">
       <label>From
         <select id="diff-from"></select>

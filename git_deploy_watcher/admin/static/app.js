@@ -2,6 +2,9 @@
 
 let currentConfig = null;
 let tokenMasked = false;
+let activeTab = "general";
+
+const EDITOR_TABS = ["general", "deploy", "telegram", "repos", "environment"];
 
 function $(sel) { return document.querySelector(sel); }
 function show(el, text, ok) {
@@ -11,20 +14,38 @@ function show(el, text, ok) {
 }
 function hide(el) { el.classList.add("hidden"); }
 
-function envToRows(container, env, prefix) {
-  container.innerHTML = "";
-  const entries = Object.entries(env || {});
-  if (!entries.length) addEnvRow(container, "", "", prefix);
-  else entries.forEach(([k, v]) => addEnvRow(container, k, v, prefix));
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll("#main-tabs .tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+
+  const isHistory = tab === "history";
+  $("#config-form").classList.toggle("hidden", isHistory);
+  $("#panel-history").classList.toggle("hidden", !isHistory);
+
+  EDITOR_TABS.forEach((name) => {
+    const panel = $(`#panel-${name}`);
+    if (panel) panel.classList.toggle("hidden", isHistory || name !== tab);
+  });
+
+  if (isHistory) refreshHistorySelectors();
 }
 
-function addEnvRow(container, key, val, prefix) {
+function envToRows(container, env) {
+  container.innerHTML = "";
+  const entries = Object.entries(env || {});
+  if (!entries.length) addEnvRow(container, "", "");
+  else entries.forEach(([k, v]) => addEnvRow(container, k, v));
+}
+
+function addEnvRow(container, key, val) {
   const row = document.createElement("div");
   row.className = "kv-row";
   row.innerHTML =
     `<input type="text" placeholder="KEY" data-env-key value="${escAttr(key)}">` +
     `<input type="text" placeholder="value" data-env-val value="${escAttr(val)}">` +
-    `<button type="button" class="danger" data-remove-env>×</button>`;
+    `<button type="button" class="danger" data-remove-env title="Remove">×</button>`;
   row.querySelector("[data-remove-env]").onclick = () => row.remove();
   container.appendChild(row);
 }
@@ -47,16 +68,35 @@ function renderRepo(repo, index) {
   const card = document.createElement("div");
   card.className = "repo-card";
   card.dataset.index = String(index);
-  const title = repo.name || `repo ${index + 1}`;
-  card.innerHTML = `<h3><span>${escAttr(title)}</span><button type="button" class="danger" data-remove-repo>Remove</button></h3>` +
-    `<label>Name <input data-field="name" value="${escAttr(repo.name || "")}"></label>` +
-    `<label>URL (SSH) <input data-field="url" required value="${escAttr(repo.url || "")}"></label>` +
-    `<label>Branch <input data-field="branch" required value="${escAttr(repo.branch || "")}"></label>` +
-    `<label>SSH identity <input data-field="ssh_identity_file" value="${escAttr(repo.ssh_identity_file || "")}"></label>` +
-    `<p class="subtitle">Per-repo start.sh environment</p>` +
+  const title = repo.name || `Repository ${index + 1}`;
+    card.innerHTML =
+    `<h3><span class="repo-title">${escAttr(title)}</span>` +
+    `<span class="repo-actions">` +
+    `<button type="button" class="secondary btn-sm" data-save-deploy-repo title="Save config then pull and run start.sh">Save &amp; deploy</button>` +
+    `<button type="button" class="secondary btn-sm" data-deploy-repo title="Pull and run start.sh now (uses saved config)">Deploy now</button>` +
+    `<button type="button" class="danger" data-remove-repo>Remove</button></span></h3>` +
+    `<div class="field-grid">` +
+    `<label>Name <input data-field="name" placeholder="derived from URL if empty" value="${escAttr(repo.name || "")}"></label>` +
+    `<label>Branch <input data-field="branch" required value="${escAttr(repo.branch || "main")}"></label>` +
+    `</div>` +
+    `<label>URL (SSH) <input data-field="url" required value="${escAttr(repo.url || "")}" placeholder="git@github.com:org/repo.git"></label>` +
+    `<label>SSH identity file <input data-field="ssh_identity_file" value="${escAttr(repo.ssh_identity_file || "")}" placeholder="optional per-repo key"></label>` +
+    `<details class="repo-env-details">` +
+    `<summary>Per-repo environment variables</summary>` +
     `<div class="kv-table" data-repo-env></div>` +
-    `<button type="button" class="secondary" data-add-repo-env>Add variable</button>`;
+    `<button type="button" class="secondary btn-sm" data-add-repo-env>Add variable</button>` +
+    `</details>`;
+
+  const nameInput = card.querySelector('[data-field="name"]');
+  const titleEl = card.querySelector(".repo-title");
+  nameInput.addEventListener("input", () => {
+    const v = nameInput.value.trim();
+    titleEl.textContent = v || `Repository ${index + 1}`;
+  });
+
   card.querySelector("[data-remove-repo]").onclick = () => card.remove();
+  card.querySelector("[data-deploy-repo]").onclick = () => deployRepoFromCard(card, false);
+  card.querySelector("[data-save-deploy-repo]").onclick = () => deployRepoFromCard(card, true);
   const envBox = card.querySelector("[data-repo-env]");
   envToRows(envBox, repo.env || {});
   card.querySelector("[data-add-repo-env]").onclick = () => addEnvRow(envBox, "", "");
@@ -80,7 +120,7 @@ function fillForm(cfg) {
   const tg = cfg.telegram || {};
   tokenMasked = !!(tg.bot_token);
   f.telegram_bot_token.value = tokenMasked ? "********" : "";
-  f.telegram_bot_token.placeholder = tokenMasked ? "leave blank to keep" : "optional inline token";
+  f.telegram_bot_token.placeholder = tokenMasked ? "leave blank to keep existing" : "optional inline token";
   f.telegram_chat_id.value = tg.chat_id != null ? String(tg.chat_id) : "";
   f.telegram_bot_token_env.value = tg.bot_token_env || "TELEGRAM_BOT_TOKEN";
   f.telegram_chat_id_env.value = tg.chat_id_env || "TELEGRAM_CHAT_ID";
@@ -146,6 +186,15 @@ function showValidationErrors(errors) {
   box.classList.remove("hidden");
 }
 
+function tabForErrorPath(path) {
+  if (!path) return "general";
+  if (path.startsWith("telegram")) return "telegram";
+  if (path.startsWith("repos")) return "repos";
+  if (path.startsWith("start_sh_env")) return "environment";
+  if (path.includes("timeout") || path.includes("retry") || path.includes("backoff")) return "deploy";
+  return "general";
+}
+
 async function loadConfig() {
   const res = await fetch("/api/config");
   const data = await res.json();
@@ -159,6 +208,7 @@ async function loadConfig() {
   if (!data.validation_ok) {
     show($("#status"), "Config on disk has validation errors", false);
     showValidationErrors(data.errors);
+    if (data.errors?.length) switchTab(tabForErrorPath(data.errors[0].path));
   } else {
     hide($("#validation-errors"));
     show($("#status"), `Loaded config v${data.config.config_version || "?"}`, true);
@@ -169,23 +219,88 @@ async function loadConfig() {
   await refreshHistorySelectors();
 }
 
-async function saveConfig(ev) {
-  ev.preventDefault();
+function repoNameFromCard(card) {
+  const name = card.querySelector('[data-field="name"]').value.trim();
+  if (name) return name;
+  const url = card.querySelector('[data-field="url"]').value.trim();
+  if (!url) return null;
+  const base = url.replace(/\/$/, "").split(/[:/]/).pop() || "";
+  return base.replace(/\.git$/i, "") || null;
+}
+
+async function deployRepoByName(name, { saveFirst, card }) {
+  if (!name) {
+    show($("#status"), "Set repo name or URL first", false);
+    switchTab("repos");
+    return;
+  }
+  if (saveFirst) {
+    const ok = await saveConfig(null, { deploy: [name], silent: true });
+    if (!ok) return;
+  } else {
+    const res = await fetch(`/api/repos/${encodeURIComponent(name)}/deploy`, { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) {
+      show($("#status"), `Deploy failed for ${name}`, false);
+      showValidationErrors(data.errors);
+      return;
+    }
+  }
+  show($("#status"), `Deploy queued for ${name} — pull + start.sh runs within ~1 poll`, true);
+}
+
+async function deployRepoFromCard(card, saveFirst) {
+  const name = repoNameFromCard(card);
+  await deployRepoByName(name, { saveFirst, card });
+}
+
+async function saveConfig(ev, opts = {}) {
+  if (ev) ev.preventDefault();
   const cfg = collectConfig();
-  const res = await fetch("/api/config", {
+  let url = "/api/config";
+  const deployList = opts.deploy || [];
+  if ($("#deploy-all-after-save")?.checked) {
+    cfg.repos.forEach((r) => {
+      const n = r.name || deriveNameFromUrl(r.url);
+      if (n) deployList.push(n);
+    });
+  }
+  if (deployList.length) {
+    url += "?" + [...new Set(deployList)].map((n) => `deploy=${encodeURIComponent(n)}`).join("&");
+  }
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(cfg),
   });
   const data = await res.json();
   if (!data.ok) {
-    show($("#status"), "Save failed", false);
+    if (!opts.silent) show($("#status"), "Save failed", false);
     showValidationErrors(data.errors);
-    return;
+    if (data.errors?.length) switchTab(tabForErrorPath(data.errors[0].path));
+    return false;
   }
   hide($("#validation-errors"));
-  show($("#status"), `Saved config v${data.config_version}`, true);
+  let msg = `Saved config v${data.config_version}`;
+  if (data.deploy_queued?.length) {
+    msg += ` — deploy queued: ${data.deploy_queued.join(", ")}`;
+  }
+  if (!opts.silent) show($("#status"), msg, true);
   await loadConfig();
+  return true;
+}
+
+function deriveNameFromUrl(url) {
+  const u = url.trim().replace(/\/$/, "");
+  if (!u) return null;
+  if (u.toLowerCase().startsWith("ssh://")) {
+    const path = u.split("//", 2)[1]?.split("/", 2)[1] || "";
+    const base = path.split("/").pop() || "";
+    return base.replace(/\.git$/i, "") || null;
+  }
+  const rest = u.includes(":") ? u.split(":").pop() : u;
+  const base = rest.split("/").pop() || "";
+  return base.replace(/\.git$/i, "") || null;
 }
 
 async function refreshHistorySelectors() {
@@ -210,15 +325,8 @@ async function runDiff() {
   $("#diff-output").textContent = data.diff || data.errors?.[0]?.message || "(no diff)";
 }
 
-document.querySelectorAll(".tab").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    const tab = btn.dataset.tab;
-    $("#panel-editor").classList.toggle("hidden", tab !== "editor");
-    $("#panel-history").classList.toggle("hidden", tab !== "history");
-    if (tab === "history") refreshHistorySelectors();
-  };
+document.querySelectorAll("#main-tabs .tab").forEach((btn) => {
+  btn.onclick = () => switchTab(btn.dataset.tab);
 });
 
 $("#add-global-env").onclick = () => addEnvRow($("#start-sh-env"), "", "");
@@ -230,4 +338,5 @@ $("#config-form").onsubmit = saveConfig;
 $("#reload-btn").onclick = () => loadConfig();
 $("#run-diff").onclick = runDiff;
 
+switchTab("general");
 loadConfig();

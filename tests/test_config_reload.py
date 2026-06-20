@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import json
-import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from git_deploy_watcher.config import ConfigError, load_config
 from git_deploy_watcher.main import run_loop
 
 
@@ -28,14 +26,14 @@ class TestConfigReload(unittest.TestCase):
             _write_config(p, valid)
             iterations = {"n": 0}
 
-            def fake_sleep(seconds: float) -> None:
+            def fake_wait(_state: Path, seconds: float) -> None:
                 iterations["n"] += 1
                 if iterations["n"] == 1:
                     p.write_text("{ not json", encoding="utf-8")
                 if iterations["n"] >= 2:
                     raise StopIteration
 
-            with patch("git_deploy_watcher.main.time.sleep", fake_sleep):
+            with patch("git_deploy_watcher.main.wait_or_timeout", side_effect=fake_wait):
                 with patch("git_deploy_watcher.main.tick_repo") as tick:
                     with self.assertRaises(StopIteration):
                         run_loop(p)
@@ -51,20 +49,18 @@ class TestConfigReload(unittest.TestCase):
         with TemporaryDirectory() as td:
             p = Path(td) / "config.json"
             p.write_text("{ bad", encoding="utf-8")
-            iterations = {"n": 0}
-
             def fake_sleep(seconds: float) -> None:
-                iterations["n"] += 1
-                if iterations["n"] == 1:
-                    _write_config(p, valid)
-                if iterations["n"] >= 2:
-                    raise StopIteration
+                _write_config(p, valid)
 
-            with patch("git_deploy_watcher.main.time.sleep", fake_sleep):
-                with patch("git_deploy_watcher.main.tick_repo") as tick:
-                    with self.assertRaises(StopIteration):
-                        run_loop(p)
-                    self.assertEqual(tick.call_count, 1)
+            def fake_wait(_state: Path, seconds: float) -> None:
+                raise StopIteration
+
+            with patch("git_deploy_watcher.main.time.sleep", side_effect=fake_sleep):
+                with patch("git_deploy_watcher.main.wait_or_timeout", side_effect=fake_wait):
+                    with patch("git_deploy_watcher.main.tick_repo") as tick:
+                        with self.assertRaises(StopIteration):
+                            run_loop(p)
+                        self.assertEqual(tick.call_count, 1)
 
 
 if __name__ == "__main__":

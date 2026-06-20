@@ -36,6 +36,7 @@ from git_deploy_watcher.notify import (
     send_telegram_message,
     truncate_telegram_message,
 )
+from git_deploy_watcher.deploy_trigger import drain_triggers, wait_or_timeout
 from git_deploy_watcher.state import load_last_deployed, save_last_deployed
 
 logger = logging.getLogger(__name__)
@@ -250,8 +251,16 @@ def tick_repo(
     deployed: dict[str, str],
     limiter: TelegramRateLimiter,
     backoff: DeployBackoffState,
+    *,
+    only_repos: frozenset[str] | None = None,
+    force_repos: frozenset[str] | None = None,
 ) -> None:
     for repo in cfg.repos:
+        if only_repos is not None and repo.name not in only_repos:
+            continue
+        forced = force_repos is not None and repo.name in force_repos
+        if forced:
+            logger.info("manual deploy: pulling and running start.sh for %s", repo.name)
         git_env = build_git_env(cfg, repo=repo)
         start_env = build_start_sh_env(cfg, repo)
         lock_path = cfg.state_file.parent / "locks" / f"{repo.name}.lock"
@@ -283,7 +292,7 @@ def tick_repo(
                         )
                         continue
                     logger.info("cloned %s at %s", repo.name, head)
-                    if not backoff.ready(repo.name):
+                    if not forced and not backoff.ready(repo.name):
                         rem = int(backoff.wait_seconds(repo.name) + 0.999)
                         logger.info(
                             "skipping start.sh for %s after clone (backoff, ~%ds left)",
@@ -453,11 +462,12 @@ def tick_repo(
                 if head_after != head_before:
                     logger.info("repo %s updated %s -> %s", repo.name, head_before, head_after)
 
-                if last_ok is not None and head_after == last_ok:
+                if not forced and last_ok is not None and head_after == last_ok:
                     continue
 
                 if (
-                    last_ok is None
+                    not forced
+                    and last_ok is None
                     and head_after == head_before
                     and backoff.failure_streak(repo.name) == 0
                     and backoff.ready(repo.name)
@@ -473,7 +483,7 @@ def tick_repo(
                     )
                     continue
 
-                if not backoff.ready(repo.name):
+                if not forced and not backoff.ready(repo.name):
                     rem = int(backoff.wait_seconds(repo.name) + 0.999)
                     logger.info(
                         "skipping start.sh for %s (backoff, ~%ds left)",
@@ -546,11 +556,23 @@ def run_loop(config_path: Path) -> None:
                 continue
 
         deployed = load_last_deployed(cfg.state_file)
+        triggers = drain_triggers(cfg.state_file)
         try:
-            tick_repo(cfg, deployed, limiter, backoff)
+            if triggers:
+                logger.info("processing manual deploy trigger(s): %s", ", ".join(sorted(triggers)))
+                tick_repo(
+                    cfg,
+                    deployed,
+                    limiter,
+                    backoff,
+                    only_repos=frozenset(triggers),
+                    force_repos=frozenset(triggers),
+                )
+            else:
+                tick_repo(cfg, deployed, limiter, backoff)
         except Exception:
             logger.exception("tick failed")
-        time.sleep(poll_sleep)
+        wait_or_timeout(cfg.state_file, float(poll_sleep))
 
 
 def _parse_admin_bind(value: str) -> tuple[str, int]:
