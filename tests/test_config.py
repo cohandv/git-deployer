@@ -417,6 +417,7 @@ class TestBuildStartShEnv(unittest.TestCase):
                         branch="main",
                         ssh_identity_file=None,
                         env={"PORT": "8080"},
+                        enabled=True,
                     ),
                 ),
             )
@@ -505,6 +506,7 @@ class TestBuildGitEnv(unittest.TestCase):
                 branch="main",
                 ssh_identity_file=key,
                 env={},
+                enabled=True,
             )
             env = build_git_env(cfg, repo=repo, parent={})
             self.assertEqual(env["GIT_SSH_COMMAND"].count("-i "), 1)

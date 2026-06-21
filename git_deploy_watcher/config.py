@@ -45,6 +45,7 @@ class RepoConfig:
     branch: str
     ssh_identity_file: Path | None
     env: Mapping[str, str]
+    enabled: bool
 
 
 @dataclass(frozen=True)
@@ -336,8 +337,19 @@ def validate_config(data: dict[str, Any]) -> AppConfig:
             except ConfigValidationError as e:
                 errors.extend(e.errors)
                 repo_env = {}
+            enabled_raw = item.get("enabled", True)
+            if not isinstance(enabled_raw, bool):
+                err(f"{prefix}.enabled", "must be a boolean")
+                enabled_raw = True
             repos.append(
-                RepoConfig(name=name, url=url, branch=branch, ssh_identity_file=repo_ssh, env=repo_env)
+                RepoConfig(
+                    name=name,
+                    url=url,
+                    branch=branch,
+                    ssh_identity_file=repo_ssh,
+                    env=repo_env,
+                    enabled=enabled_raw,
+                )
             )
 
     if errors:
@@ -424,7 +436,12 @@ def summarize_config_diff(old: AppConfig, new: AppConfig) -> str:
     old_by_name = {r.name: r for r in old.repos}
     for r in new.repos:
         prev = old_by_name.get(r.name)
-        if prev and (prev.url != r.url or prev.branch != r.branch or prev.env != r.env):
+        if prev and (
+            prev.url != r.url
+            or prev.branch != r.branch
+            or prev.env != r.env
+            or prev.enabled != r.enabled
+        ):
             changed.append(r.name)
     if changed:
         bits.append(f"changed repos: {', '.join(sorted(changed))}")

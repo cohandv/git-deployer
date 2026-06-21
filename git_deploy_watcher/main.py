@@ -259,6 +259,8 @@ def tick_repo(
         if only_repos is not None and repo.name not in only_repos:
             continue
         forced = force_repos is not None and repo.name in force_repos
+        if not repo.enabled and not forced:
+            continue
         if forced:
             logger.info("manual deploy: pulling and running start.sh for %s", repo.name)
         git_env = build_git_env(cfg, repo=repo)

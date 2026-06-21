@@ -52,21 +52,28 @@ From the **Repositories** tab:
 - **Save & deploy** — save the form, then queue deploy for that repo.
 - **Deploy all repos after save** — checkbox on the save bar.
 
-CLI (same machine, file-based trigger — no admin HTTP required):
+### CLI (`git-deploy-admin`, Go)
+
+The admin CLI is a **Go** binary (stdlib + HTTP client only). Build:
 
 ```bash
-git-deploy-admin --config /etc/git-deployer/config.json deploy api
-git-deploy-admin apply -f config.json --deploy api
+make git-deploy-admin
+# or: cd cmd/git-deploy-admin && go build -o ../../git-deploy-admin .
+sudo install -m 755 git-deploy-admin /usr/local/bin/
 ```
 
-Via running admin HTTP server:
+Set `GIT_DEPLOY_ADMIN_URL` or pass `--api-url` when the watcher admin server is running (`--admin-bind`). Full validation and migration go through the HTTP API; without it, `deploy` writes a trigger file and `apply` uses basic local checks.
 
 ```bash
+git-deploy-admin --api-url http://127.0.0.1:8765 show
 git-deploy-admin --api-url http://127.0.0.1:8765 deploy api
-git-deploy-admin api post --url http://127.0.0.1:8765 -f config.json --deploy api
+git-deploy-admin --config /etc/git-deployer/config.json apply -f config.json --deploy api
+git-deploy-admin --config /etc/git-deployer/config.json deploy api   # file trigger, no HTTP
+git-deploy-admin history list
+git-deploy-admin history diff --from 20250620T120000Z --to current
 ```
 
-Other CLI commands: `show`, `validate`, `history list`, `history diff --from ID --to current`, `api get --url …`.
+Commands: `show`, `validate`, `apply`, `deploy`, `history list|diff`, `api get|post`.
 
 ### `start.sh` environment
 

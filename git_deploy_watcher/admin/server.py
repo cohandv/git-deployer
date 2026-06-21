@@ -54,6 +54,7 @@ _SCHEMA_V2: dict[str, Any] = {
                 "branch": {"type": "string", "required": True},
                 "ssh_identity_file": {"type": "string", "optional": True},
                 "env": {"type": "object", "values": "string"},
+                "enabled": {"type": "boolean", "default": True},
             },
         },
     },
@@ -150,6 +151,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/config":
             self._post_config(parse_qs(parsed.query))
             return
+        if parsed.path == "/api/config/validate":
+            self._post_config_validate()
+            return
         if parsed.path.startswith("/api/repos/") and parsed.path.endswith("/deploy"):
             repo_name = parsed.path[len("/api/repos/") : -len("/deploy")]
             self._post_repo_deploy(repo_name)
@@ -202,6 +206,31 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
         except OSError as e:
             _json_response(self, 500, {"ok": False, "errors": [{"path": "", "message": str(e)}]})
+
+    def _post_config_validate(self) -> None:
+        try:
+            raw = _read_body(self)
+            data = parse_raw_text(raw.decode("utf-8"), source="request body")
+        except (UnicodeDecodeError, ConfigError) as e:
+            _json_response(self, 400, {"ok": False, "errors": [{"path": "", "message": str(e)}]})
+            return
+        try:
+            merged = self._merge_sensitive_fields(data)
+            load_config_dict(merged)
+            migrated, warnings = migrate(merged)
+            _json_response(
+                self,
+                200,
+                {"ok": True, "config_version": migrated.get("config_version"), "warnings": warnings},
+            )
+        except ConfigValidationError as e:
+            _json_response(
+                self,
+                400,
+                {"ok": False, "errors": [{"path": x.path, "message": x.message} for x in e.errors]},
+            )
+        except ConfigError as e:
+            _json_response(self, 400, {"ok": False, "errors": [{"path": "", "message": str(e)}]})
 
     def _post_config(self, query: dict[str, list[str]]) -> None:
         try:

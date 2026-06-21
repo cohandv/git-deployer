@@ -74,6 +74,29 @@ class TestAdminAPI(unittest.TestCase):
         self.assertFalse(data["ok"])
         self.assertTrue(any("repos" in e.get("path", "") for e in data["errors"]))
 
+    def test_post_validate_does_not_write(self) -> None:
+        before = self.config_path.read_text(encoding="utf-8")
+        body = {
+            "config_version": 2,
+            "base_path": "/var/deploy/apps",
+            "poll_interval_seconds": 99,
+            "repos": [{"name": "api", "url": "git@github.com:org/api.git", "branch": "main"}],
+        }
+        status, data = _post_json(f"{self.base}/api/config/validate", body)
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(self.config_path.read_text(encoding="utf-8"), before)
+
+    def test_post_validate_invalid_returns_400(self) -> None:
+        body = {
+            "config_version": 2,
+            "base_path": "/tmp/apps",
+            "repos": [{"url": "https://github.com/org/foo.git", "branch": "main"}],
+        }
+        status, data = _post_json(f"{self.base}/api/config/validate", body)
+        self.assertEqual(status, 400)
+        self.assertFalse(data["ok"])
+
     def test_post_valid_updates_file(self) -> None:
         body = {
             "config_version": 2,

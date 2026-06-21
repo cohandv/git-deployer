@@ -3,6 +3,8 @@
 let currentConfig = null;
 let tokenMasked = false;
 let activeTab = "general";
+/** @type {Array<object>} */
+let reposState = [];
 
 const EDITOR_TABS = ["general", "deploy", "telegram", "repos", "environment"];
 
@@ -64,43 +66,163 @@ function escAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-function renderRepo(repo, index) {
-  const card = document.createElement("div");
-  card.className = "repo-card";
-  card.dataset.index = String(index);
-  const title = repo.name || `Repository ${index + 1}`;
-    card.innerHTML =
-    `<h3><span class="repo-title">${escAttr(title)}</span>` +
-    `<span class="repo-actions">` +
-    `<button type="button" class="secondary btn-sm" data-save-deploy-repo title="Save config then pull and run start.sh">Save &amp; deploy</button>` +
-    `<button type="button" class="secondary btn-sm" data-deploy-repo title="Pull and run start.sh now (uses saved config)">Deploy now</button>` +
-    `<button type="button" class="danger" data-remove-repo>Remove</button></span></h3>` +
-    `<div class="field-grid">` +
-    `<label>Name <input data-field="name" placeholder="derived from URL if empty" value="${escAttr(repo.name || "")}"></label>` +
-    `<label>Branch <input data-field="branch" required value="${escAttr(repo.branch || "main")}"></label>` +
-    `</div>` +
-    `<label>URL (SSH) <input data-field="url" required value="${escAttr(repo.url || "")}" placeholder="git@github.com:org/repo.git"></label>` +
-    `<label>SSH identity file <input data-field="ssh_identity_file" value="${escAttr(repo.ssh_identity_file || "")}" placeholder="optional per-repo key"></label>` +
-    `<details class="repo-env-details">` +
-    `<summary>Per-repo environment variables</summary>` +
-    `<div class="kv-table" data-repo-env></div>` +
-    `<button type="button" class="secondary btn-sm" data-add-repo-env>Add variable</button>` +
-    `</details>`;
+function escText(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+}
 
-  const nameInput = card.querySelector('[data-field="name"]');
-  const titleEl = card.querySelector(".repo-title");
-  nameInput.addEventListener("input", () => {
-    const v = nameInput.value.trim();
-    titleEl.textContent = v || `Repository ${index + 1}`;
+function deriveNameFromUrl(url) {
+  const u = url.trim().replace(/\/$/, "");
+  if (!u) return null;
+  if (u.toLowerCase().startsWith("ssh://")) {
+    const parts = u.split("//", 2)[1] || "";
+    const path = parts.includes("/") ? parts.split("/", 2)[1] || "" : parts;
+    const base = path.split("/").pop() || "";
+    return base.replace(/\.git$/i, "") || null;
+  }
+  const rest = u.includes(":") ? u.split(":").pop() : u;
+  const base = rest.split("/").pop() || "";
+  return base.replace(/\.git$/i, "") || null;
+}
+
+function repoDisplayName(repo) {
+  return repo.name || deriveNameFromUrl(repo.url) || "(unnamed)";
+}
+
+function normalizeRepo(raw) {
+  return {
+    name: raw.name || "",
+    url: raw.url || "",
+    branch: raw.branch || "main",
+    ssh_identity_file: raw.ssh_identity_file || "",
+    env: { ...(raw.env || {}) },
+    enabled: raw.enabled !== false,
+  };
+}
+
+function repoToConfigObject(repo) {
+  const out = {
+    url: repo.url.trim(),
+    branch: repo.branch.trim() || "main",
+    env: repo.env || {},
+  };
+  const name = (repo.name || "").trim();
+  const ssh = (repo.ssh_identity_file || "").trim();
+  if (name) out.name = name;
+  if (ssh) out.ssh_identity_file = ssh;
+  if (repo.enabled === false) out.enabled = false;
+  return out;
+}
+
+function renderRepoTable() {
+  const tbody = $("#repo-table-body");
+  const empty = $("#repo-table-empty");
+  const table = $("#repo-table");
+  tbody.innerHTML = "";
+
+  if (!reposState.length) {
+    table.classList.add("hidden");
+    empty.classList.remove("hidden");
+    return;
+  }
+
+  table.classList.remove("hidden");
+  empty.classList.add("hidden");
+
+  reposState.forEach((repo, index) => {
+    const name = repoDisplayName(repo);
+    const tr = document.createElement("tr");
+    if (!repo.enabled) tr.classList.add("repo-row-disabled");
+    tr.innerHTML =
+      `<td><strong>${escText(name)}</strong></td>` +
+      `<td>${escText(repo.branch)}</td>` +
+      `<td class="repo-url-cell" title="${escAttr(repo.url)}">${escText(repo.url)}</td>` +
+      `<td><span class="badge ${repo.enabled ? "badge-ok" : "badge-muted"}">${repo.enabled ? "Enabled" : "Disabled"}</span></td>` +
+      `<td class="repo-row-actions"></td>`;
+
+    const actions = tr.querySelector(".repo-row-actions");
+    actions.appendChild(actionBtn("Edit", () => openRepoDialog(index)));
+    actions.appendChild(actionBtn("Deploy", () => deployRepoByName(name, { saveFirst: false })));
+    actions.appendChild(actionBtn(repo.enabled ? "Disable" : "Enable", () => toggleRepoEnabled(index)));
+    actions.appendChild(actionBtn("Delete", () => confirmDeleteRepo(index), true));
+
+    tbody.appendChild(tr);
   });
+}
 
-  card.querySelector("[data-remove-repo]").onclick = () => card.remove();
-  card.querySelector("[data-deploy-repo]").onclick = () => deployRepoFromCard(card, false);
-  card.querySelector("[data-save-deploy-repo]").onclick = () => deployRepoFromCard(card, true);
-  const envBox = card.querySelector("[data-repo-env]");
-  envToRows(envBox, repo.env || {});
-  card.querySelector("[data-add-repo-env]").onclick = () => addEnvRow(envBox, "", "");
-  return card;
+function actionBtn(label, onclick, danger) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = danger ? "link-btn link-danger" : "link-btn";
+  b.textContent = label;
+  b.onclick = onclick;
+  return b;
+}
+
+function openRepoDialog(index) {
+  const isCreate = index < 0;
+  const repo = isCreate
+    ? normalizeRepo({ branch: "main", env: {}, enabled: true })
+    : normalizeRepo(reposState[index]);
+
+  $("#repo-dialog-title").textContent = isCreate ? "Add repository" : `Edit ${repoDisplayName(repo)}`;
+  $("#repo-dialog-index").value = String(index);
+  $("#repo-d-name").value = repo.name;
+  $("#repo-d-url").value = repo.url;
+  $("#repo-d-branch").value = repo.branch;
+  $("#repo-d-ssh").value = repo.ssh_identity_file;
+  $("#repo-d-enabled").checked = repo.enabled;
+  envToRows($("#repo-d-env"), repo.env);
+
+  $("#repo-dialog").classList.remove("hidden");
+  $("#repo-d-url").focus();
+}
+
+function closeRepoDialog() {
+  $("#repo-dialog").classList.add("hidden");
+}
+
+function readRepoDialog() {
+  return normalizeRepo({
+    name: $("#repo-d-name").value.trim(),
+    url: $("#repo-d-url").value.trim(),
+    branch: $("#repo-d-branch").value.trim() || "main",
+    ssh_identity_file: $("#repo-d-ssh").value.trim(),
+    enabled: $("#repo-d-enabled").checked,
+    env: readEnvTable($("#repo-d-env")),
+  });
+}
+
+function saveRepoDialog(ev) {
+  ev.preventDefault();
+  const repo = readRepoDialog();
+  if (!repo.url) {
+    show($("#status"), "Repository URL is required", false);
+    return;
+  }
+  const index = parseInt($("#repo-dialog-index").value, 10);
+  if (index >= 0) {
+    reposState[index] = repo;
+  } else {
+    reposState.push(repo);
+  }
+  renderRepoTable();
+  closeRepoDialog();
+  show($("#status"), "Repository updated in editor — click Save config to persist", true);
+}
+
+function toggleRepoEnabled(index) {
+  reposState[index].enabled = !reposState[index].enabled;
+  renderRepoTable();
+  const name = repoDisplayName(reposState[index]);
+  show($("#status"), `${name} ${reposState[index].enabled ? "enabled" : "disabled"} — Save config to persist`, true);
+}
+
+function confirmDeleteRepo(index) {
+  const name = repoDisplayName(reposState[index]);
+  if (!window.confirm(`Delete repository "${name}" from config?`)) return;
+  reposState.splice(index, 1);
+  renderRepoTable();
+  show($("#status"), `Removed ${name} — Save config to persist`, true);
 }
 
 function fillForm(cfg) {
@@ -125,27 +247,13 @@ function fillForm(cfg) {
   f.telegram_bot_token_env.value = tg.bot_token_env || "TELEGRAM_BOT_TOKEN";
   f.telegram_chat_id_env.value = tg.chat_id_env || "TELEGRAM_CHAT_ID";
 
-  const reposEl = $("#repos");
-  reposEl.innerHTML = "";
-  (cfg.repos || []).forEach((r, i) => reposEl.appendChild(renderRepo(r, i)));
-  if (!(cfg.repos || []).length) reposEl.appendChild(renderRepo({ url: "", branch: "main", env: {} }, 0));
+  reposState = (cfg.repos || []).map(normalizeRepo);
+  renderRepoTable();
 }
 
 function collectConfig() {
   const f = $("#config-form");
-  const repos = [];
-  $("#repos").querySelectorAll(".repo-card").forEach((card) => {
-    const repo = {
-      url: card.querySelector('[data-field="url"]').value.trim(),
-      branch: card.querySelector('[data-field="branch"]').value.trim(),
-      env: readEnvTable(card.querySelector("[data-repo-env]")),
-    };
-    const name = card.querySelector('[data-field="name"]').value.trim();
-    const ssh = card.querySelector('[data-field="ssh_identity_file"]').value.trim();
-    if (name) repo.name = name;
-    if (ssh) repo.ssh_identity_file = ssh;
-    repos.push(repo);
-  });
+  const repos = reposState.map(repoToConfigObject);
 
   const tg = {
     bot_token_env: f.telegram_bot_token_env.value.trim() || "TELEGRAM_BOT_TOKEN",
@@ -219,18 +327,9 @@ async function loadConfig() {
   await refreshHistorySelectors();
 }
 
-function repoNameFromCard(card) {
-  const name = card.querySelector('[data-field="name"]').value.trim();
-  if (name) return name;
-  const url = card.querySelector('[data-field="url"]').value.trim();
-  if (!url) return null;
-  const base = url.replace(/\/$/, "").split(/[:/]/).pop() || "";
-  return base.replace(/\.git$/i, "") || null;
-}
-
-async function deployRepoByName(name, { saveFirst, card }) {
+async function deployRepoByName(name, { saveFirst }) {
   if (!name) {
-    show($("#status"), "Set repo name or URL first", false);
+    show($("#status"), "Repository name or URL required", false);
     switchTab("repos");
     return;
   }
@@ -246,21 +345,22 @@ async function deployRepoByName(name, { saveFirst, card }) {
       return;
     }
   }
-  show($("#status"), `Deploy queued for ${name} — pull + start.sh runs within ~1 poll`, true);
-}
-
-async function deployRepoFromCard(card, saveFirst) {
-  const name = repoNameFromCard(card);
-  await deployRepoByName(name, { saveFirst, card });
+  show($("#status"), `Deploy queued for ${name} — pull + start.sh runs shortly`, true);
 }
 
 async function saveConfig(ev, opts = {}) {
   if (ev) ev.preventDefault();
+  if (!reposState.length) {
+    show($("#status"), "Add at least one repository", false);
+    switchTab("repos");
+    return false;
+  }
   const cfg = collectConfig();
   let url = "/api/config";
   const deployList = opts.deploy || [];
   if ($("#deploy-all-after-save")?.checked) {
     cfg.repos.forEach((r) => {
+      if (r.enabled === false) return;
       const n = r.name || deriveNameFromUrl(r.url);
       if (n) deployList.push(n);
     });
@@ -290,19 +390,6 @@ async function saveConfig(ev, opts = {}) {
   return true;
 }
 
-function deriveNameFromUrl(url) {
-  const u = url.trim().replace(/\/$/, "");
-  if (!u) return null;
-  if (u.toLowerCase().startsWith("ssh://")) {
-    const path = u.split("//", 2)[1]?.split("/", 2)[1] || "";
-    const base = path.split("/").pop() || "";
-    return base.replace(/\.git$/i, "") || null;
-  }
-  const rest = u.includes(":") ? u.split(":").pop() : u;
-  const base = rest.split("/").pop() || "";
-  return base.replace(/\.git$/i, "") || null;
-}
-
 async function refreshHistorySelectors() {
   const res = await fetch("/api/history");
   const data = await res.json();
@@ -330,10 +417,16 @@ document.querySelectorAll("#main-tabs .tab").forEach((btn) => {
 });
 
 $("#add-global-env").onclick = () => addEnvRow($("#start-sh-env"), "", "");
-$("#add-repo").onclick = () => {
-  const n = $("#repos").querySelectorAll(".repo-card").length;
-  $("#repos").appendChild(renderRepo({ url: "", branch: "main", env: {} }, n));
-};
+$("#create-repo-btn").onclick = () => openRepoDialog(-1);
+$("#repo-dialog-form").onsubmit = saveRepoDialog;
+$("#repo-d-add-env").onclick = () => addEnvRow($("#repo-d-env"), "", "");
+document.querySelectorAll("[data-close-dialog]").forEach((el) => {
+  el.onclick = closeRepoDialog;
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#repo-dialog").classList.contains("hidden")) closeRepoDialog();
+});
+
 $("#config-form").onsubmit = saveConfig;
 $("#reload-btn").onclick = () => loadConfig();
 $("#run-diff").onclick = runDiff;

@@ -65,9 +65,25 @@
     </section>
 
     <section id="panel-repos" class="panel editor-panel hidden">
-      <p class="panel-desc">SSH remotes to watch. Each repo runs its own <code>start.sh</code> on new commits.</p>
-      <div id="repos"></div>
-      <button type="button" class="secondary" id="add-repo">Add repository</button>
+      <div class="repos-toolbar">
+        <p class="panel-desc">SSH remotes to watch. Disabled repos are kept in config but not polled.</p>
+        <button type="button" class="primary btn-sm" id="create-repo-btn">Add repository</button>
+      </div>
+      <div class="repo-table-wrap">
+        <table class="repo-table" id="repo-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Branch</th>
+              <th>URL</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="repo-table-body"></tbody>
+        </table>
+        <p id="repo-table-empty" class="repo-table-empty hidden">No repositories yet. Click Add repository.</p>
+      </div>
     </section>
 
     <section id="panel-environment" class="panel editor-panel hidden">
@@ -96,6 +112,46 @@
     </div>
     <pre id="diff-output" class="diff"></pre>
   </section>
+
+  <div id="repo-dialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="repo-dialog-title">
+    <div class="modal-backdrop" data-close-dialog></div>
+    <div class="modal-panel">
+      <header class="modal-header">
+        <h2 id="repo-dialog-title">Repository</h2>
+        <button type="button" class="modal-close" data-close-dialog aria-label="Close">&times;</button>
+      </header>
+      <form id="repo-dialog-form">
+        <input type="hidden" id="repo-dialog-index" value="-1">
+        <div class="field-grid single-col">
+          <label>Name
+            <input id="repo-d-name" placeholder="derived from URL if empty">
+          </label>
+          <label>URL (SSH) *
+            <input id="repo-d-url" required placeholder="git@github.com:org/repo.git">
+          </label>
+          <label>Branch *
+            <input id="repo-d-branch" required value="main">
+          </label>
+          <label>SSH identity file
+            <input id="repo-d-ssh" placeholder="optional per-repo key">
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="repo-d-enabled" checked>
+            Enabled (poll and deploy this repo)
+          </label>
+        </div>
+        <div class="modal-section">
+          <span class="modal-section-label">Per-repo environment variables</span>
+          <div id="repo-d-env" class="kv-table"></div>
+          <button type="button" class="secondary btn-sm" id="repo-d-add-env">Add variable</button>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" data-close-dialog>Cancel</button>
+          <button type="submit" class="primary">Save repository</button>
+        </footer>
+      </form>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>
