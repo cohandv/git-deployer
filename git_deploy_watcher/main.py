@@ -253,16 +253,23 @@ def tick_repo(
     backoff: DeployBackoffState,
     *,
     only_repos: frozenset[str] | None = None,
-    force_repos: frozenset[str] | None = None,
+    force_deploy: frozenset[str] | None = None,
+    force_sync: frozenset[str] | None = None,
 ) -> None:
+    force_deploy = force_deploy or frozenset()
+    force_sync = force_sync or frozenset()
     for repo in cfg.repos:
         if only_repos is not None and repo.name not in only_repos:
             continue
-        forced = force_repos is not None and repo.name in force_repos
+        deploy_forced = repo.name in force_deploy
+        sync_forced = repo.name in force_sync and not deploy_forced
+        forced = deploy_forced or sync_forced
         if not repo.enabled and not forced:
             continue
-        if forced:
+        if deploy_forced:
             logger.info("manual deploy: pulling and running start.sh for %s", repo.name)
+        elif sync_forced:
+            logger.info("manual sync: pulling %s (no start.sh)", repo.name)
         git_env = build_git_env(cfg, repo=repo)
         start_env = build_start_sh_env(cfg, repo)
         lock_path = cfg.state_file.parent / "locks" / f"{repo.name}.lock"
@@ -294,7 +301,9 @@ def tick_repo(
                         )
                         continue
                     logger.info("cloned %s at %s", repo.name, head)
-                    if not forced and not backoff.ready(repo.name):
+                    if sync_forced:
+                        continue
+                    if not deploy_forced and not backoff.ready(repo.name):
                         rem = int(backoff.wait_seconds(repo.name) + 0.999)
                         logger.info(
                             "skipping start.sh for %s after clone (backoff, ~%ds left)",
@@ -464,11 +473,14 @@ def tick_repo(
                 if head_after != head_before:
                     logger.info("repo %s updated %s -> %s", repo.name, head_before, head_after)
 
-                if not forced and last_ok is not None and head_after == last_ok:
+                if sync_forced:
+                    continue
+
+                if not deploy_forced and last_ok is not None and head_after == last_ok:
                     continue
 
                 if (
-                    not forced
+                    not deploy_forced
                     and last_ok is None
                     and head_after == head_before
                     and backoff.failure_streak(repo.name) == 0
@@ -485,7 +497,7 @@ def tick_repo(
                     )
                     continue
 
-                if not forced and not backoff.ready(repo.name):
+                if not deploy_forced and not backoff.ready(repo.name):
                     rem = int(backoff.wait_seconds(repo.name) + 0.999)
                     logger.info(
                         "skipping start.sh for %s (backoff, ~%ds left)",
@@ -560,15 +572,21 @@ def run_loop(config_path: Path) -> None:
         deployed = load_last_deployed(cfg.state_file)
         triggers = drain_triggers(cfg.state_file)
         try:
-            if triggers:
-                logger.info("processing manual deploy trigger(s): %s", ", ".join(sorted(triggers)))
+            if triggers.all_repos:
+                parts: list[str] = []
+                if triggers.deploy:
+                    parts.append(f"deploy={','.join(sorted(triggers.deploy))}")
+                if triggers.sync:
+                    parts.append(f"sync={','.join(sorted(triggers.sync))}")
+                logger.info("processing manual trigger(s): %s", "; ".join(parts))
                 tick_repo(
                     cfg,
                     deployed,
                     limiter,
                     backoff,
-                    only_repos=frozenset(triggers),
-                    force_repos=frozenset(triggers),
+                    only_repos=triggers.all_repos,
+                    force_deploy=triggers.deploy,
+                    force_sync=triggers.sync,
                 )
             else:
                 tick_repo(cfg, deployed, limiter, backoff)

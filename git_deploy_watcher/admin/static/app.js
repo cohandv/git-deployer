@@ -141,6 +141,7 @@ function renderRepoTable() {
 
     const actions = tr.querySelector(".repo-row-actions");
     actions.appendChild(actionBtn("Edit", () => openRepoDialog(index)));
+    actions.appendChild(actionBtn("Sync", () => syncRepoByName(name)));
     actions.appendChild(actionBtn("Deploy", () => deployRepoByName(name, { saveFirst: false })));
     actions.appendChild(actionBtn(repo.enabled ? "Disable" : "Enable", () => toggleRepoEnabled(index)));
     actions.appendChild(actionBtn("Delete", () => confirmDeleteRepo(index), true));
@@ -325,6 +326,22 @@ async function loadConfig() {
     show($("#status"), `Loaded (migration: ${data.warnings.join(", ")})`, true);
   }
   await refreshHistorySelectors();
+}
+
+async function syncRepoByName(name) {
+  if (!name) {
+    show($("#status"), "Repository name or URL required", false);
+    switchTab("repos");
+    return;
+  }
+  const res = await fetch(`/api/repos/${encodeURIComponent(name)}/sync`, { method: "POST" });
+  const data = await res.json();
+  if (!data.ok) {
+    show($("#status"), `Sync failed for ${name}`, false);
+    showValidationErrors(data.errors);
+    return;
+  }
+  show($("#status"), `Sync queued for ${name} — git pull runs shortly (no start.sh)`, true);
 }
 
 async function deployRepoByName(name, { saveFirst }) {

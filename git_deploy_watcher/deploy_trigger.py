@@ -4,39 +4,58 @@ import json
 import re
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 _REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_MODE_DEPLOY = "deploy"
+_MODE_SYNC = "sync"
 
 
 class DeployTriggerError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class TriggerBatch:
+    deploy: frozenset[str]
+    sync: frozenset[str]
+
+    @property
+    def all_repos(self) -> frozenset[str]:
+        return self.deploy | self.sync
+
+
 class _InProcessTriggers:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._pending: set[str] = set()
+        self._pending: dict[str, str] = {}
         self._wake = threading.Event()
 
-    def add(self, repo_name: str) -> None:
+    def add(self, repo_name: str, *, mode: str) -> None:
         with self._lock:
-            self._pending.add(repo_name)
+            existing = self._pending.get(repo_name)
+            if existing == _MODE_DEPLOY:
+                return
+            if mode == _MODE_DEPLOY or existing is None:
+                self._pending[repo_name] = mode
         self._wake.set()
 
-    def drain(self) -> set[str]:
+    def drain(self) -> TriggerBatch:
         with self._lock:
-            names = set(self._pending)
+            pending = dict(self._pending)
             self._pending.clear()
+        deploy: set[str] = set()
+        sync: set[str] = set()
+        for name, mode in pending.items():
+            if mode == _MODE_SYNC:
+                sync.add(name)
+            else:
+                deploy.add(name)
         with self._lock:
             if not self._pending:
                 self._wake.clear()
-        return names
-
-    def wait(self, timeout: float) -> None:
-        if timeout <= 0:
-            return
-        self._wake.wait(timeout=timeout)
+        return TriggerBatch(deploy=frozenset(deploy), sync=frozenset(sync))
 
 
 _IN_PROCESS = _InProcessTriggers()
@@ -53,39 +72,72 @@ def _validate_repo_name(name: str) -> str:
     return n
 
 
-def request_deploy(state_file: Path, repo_name: str) -> None:
-    """Queue an immediate pull + deploy for ``repo_name`` (works across processes)."""
-    name = _validate_repo_name(repo_name)
+def _validate_mode(mode: str) -> str:
+    m = mode.strip().lower()
+    if m not in (_MODE_DEPLOY, _MODE_SYNC):
+        raise DeployTriggerError(f"invalid trigger mode: {mode!r}")
+    return m
+
+
+def _write_trigger_file(state_file: Path, repo_name: str, mode: str) -> None:
     tdir = triggers_dir(state_file)
     tdir.mkdir(parents=True, exist_ok=True)
-    path = tdir / f"{name}.json"
-    payload = {"repo": name, "requested_at": time.time()}
+    path = tdir / f"{repo_name}.json"
+    payload = {"repo": repo_name, "mode": mode, "requested_at": time.time()}
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     tmp.replace(path)
-    _IN_PROCESS.add(name)
 
 
-def drain_triggers(state_file: Path) -> set[str]:
-    """Return repo names with pending manual deploy requests and clear them."""
-    names = _IN_PROCESS.drain()
+def request_deploy(state_file: Path, repo_name: str) -> None:
+    """Queue an immediate pull + deploy for ``repo_name`` (works across processes)."""
+    name = _validate_repo_name(repo_name)
+    _write_trigger_file(state_file, name, _MODE_DEPLOY)
+    _IN_PROCESS.add(name, mode=_MODE_DEPLOY)
+
+
+def request_sync(state_file: Path, repo_name: str) -> None:
+    """Queue an immediate git fetch/merge for ``repo_name`` (no start.sh)."""
+    name = _validate_repo_name(repo_name)
+    _write_trigger_file(state_file, name, _MODE_SYNC)
+    _IN_PROCESS.add(name, mode=_MODE_SYNC)
+
+
+def _read_trigger_file(path: Path) -> tuple[str, str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            repo = data.get("repo")
+            mode = data.get("mode", _MODE_DEPLOY)
+            if isinstance(repo, str) and repo.strip():
+                return repo.strip(), _validate_mode(str(mode))
+    except (OSError, json.JSONDecodeError, DeployTriggerError):
+        pass
+    return path.stem, _MODE_DEPLOY
+
+
+def drain_triggers(state_file: Path) -> TriggerBatch:
+    """Return pending manual repo requests and clear them."""
+    batch = _IN_PROCESS.drain()
+    deploy = set(batch.deploy)
+    sync = set(batch.sync)
     tdir = triggers_dir(state_file)
     if tdir.is_dir():
         for p in tdir.glob("*.json"):
             if p.name.startswith("."):
                 continue
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                repo = data.get("repo") if isinstance(data, dict) else p.stem
-                if isinstance(repo, str) and repo.strip():
-                    names.add(repo.strip())
-            except (OSError, json.JSONDecodeError):
-                names.add(p.stem)
+            repo, mode = _read_trigger_file(p)
+            if mode == _MODE_SYNC:
+                if repo not in deploy:
+                    sync.add(repo)
+            else:
+                sync.discard(repo)
+                deploy.add(repo)
             try:
                 p.unlink()
             except OSError:
                 pass
-    return names
+    return TriggerBatch(deploy=frozenset(deploy), sync=frozenset(sync))
 
 
 def peek_pending(state_file: Path) -> bool:

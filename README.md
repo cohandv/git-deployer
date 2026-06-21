@@ -44,10 +44,11 @@ Open `http://127.0.0.1:8765/` (SSH tunnel for remote access). The UI validates i
 
 **Security:** bind to localhost only unless you put a reverse proxy with auth in front. Anyone who can reach the port can change deploy targets and env vars.
 
-### Immediate deploy (pull + start.sh)
+### Immediate deploy and sync
 
 From the **Repositories** tab:
 
+- **Sync** — queue git fetch/merge only (no `start.sh`); works on disabled repos.
 - **Deploy now** — queue pull + `start.sh` for a repo already in saved config (runs within ~1 second, bypasses poll wait).
 - **Save & deploy** — save the form, then queue deploy for that repo.
 - **Deploy all repos after save** — checkbox on the save bar.
@@ -62,18 +63,26 @@ make git-deploy-admin
 sudo install -m 755 git-deploy-admin /usr/local/bin/
 ```
 
-Set `GIT_DEPLOY_ADMIN_URL` or pass `--api-url` when the watcher admin server is running (`--admin-bind`). Full validation and migration go through the HTTP API; without it, `deploy` writes a trigger file and `apply` uses basic local checks.
+**Admin URL** (first match wins): `--api-url`, `GIT_DEPLOY_ADMIN_URL`, or `api_url` in an admin config file:
 
 ```bash
-git-deploy-admin --api-url http://127.0.0.1:8765 show
-git-deploy-admin --api-url http://127.0.0.1:8765 deploy api
+mkdir -p ~/.config/git-deploy-admin
+cp cmd/git-deploy-admin/config.example.json ~/.config/git-deploy-admin/config.json
+# edit api_url, e.g. http://127.0.0.1:8765
+```
+
+Also: `/etc/git-deploy-admin/config.json`, or `--admin-config PATH`. Full validation and migration go through the HTTP API; without it, `deploy`/`sync` write trigger files and `apply` uses basic local checks.
+
+```bash
+git-deploy-admin show
+git-deploy-admin deploy api
+git-deploy-admin sync api
 git-deploy-admin --config /etc/git-deployer/config.json apply -f config.json --deploy api
-git-deploy-admin --config /etc/git-deployer/config.json deploy api   # file trigger, no HTTP
 git-deploy-admin history list
 git-deploy-admin history diff --from 20250620T120000Z --to current
 ```
 
-Commands: `show`, `validate`, `apply`, `deploy`, `history list|diff`, `api get|post`.
+Commands: `show`, `validate`, `apply`, `deploy`, `sync`, `history list|diff`, `api get|post`.
 
 ### `start.sh` environment
 

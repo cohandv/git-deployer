@@ -118,6 +118,12 @@ class TestAdminAPI(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(data["deploy_queued"], ["api"])
 
+    def test_post_repo_sync(self) -> None:
+        status, data = _post_json(f"{self.base}/api/repos/api/sync", {})
+        self.assertEqual(status, 200)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["sync_queued"], ["api"])
+
     def test_post_repo_deploy_unknown(self) -> None:
         status, data = _post_json(f"{self.base}/api/repos/missing/deploy", {})
         self.assertEqual(status, 400)

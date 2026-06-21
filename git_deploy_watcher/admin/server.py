@@ -17,7 +17,7 @@ from git_deploy_watcher.config import (
 )
 from git_deploy_watcher.config_migrate import CURRENT_CONFIG_VERSION, migrate, parse_raw_text
 from git_deploy_watcher.config_store import diff_configs, list_history, load_history, save_config
-from git_deploy_watcher.deploy_trigger import DeployTriggerError, request_deploy
+from git_deploy_watcher.deploy_trigger import DeployTriggerError, request_deploy, request_sync
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,12 @@ def _read_body(handler: BaseHTTPRequestHandler) -> bytes:
     return handler.rfile.read(length)
 
 
-def _queue_deploys(config_path: Path, repo_names: list[str]) -> tuple[list[str], list[dict[str, str]]]:
+def _queue_repo_triggers(
+    config_path: Path,
+    repo_names: list[str],
+    *,
+    mode: str,
+) -> tuple[list[str], list[dict[str, str]]]:
     try:
         cfg = load_config(config_path)
     except ConfigError as e:
@@ -85,6 +90,7 @@ def _queue_deploys(config_path: Path, repo_names: list[str]) -> tuple[list[str],
     known = {r.name for r in cfg.repos}
     queued: list[str] = []
     errors: list[dict[str, str]] = []
+    request_fn = request_sync if mode == "sync" else request_deploy
     for raw in repo_names:
         name = raw.strip()
         if not name:
@@ -93,11 +99,19 @@ def _queue_deploys(config_path: Path, repo_names: list[str]) -> tuple[list[str],
             errors.append({"path": "repo", "message": f"unknown repo: {name!r}"})
             continue
         try:
-            request_deploy(cfg.state_file, name)
+            request_fn(cfg.state_file, name)
             queued.append(name)
         except DeployTriggerError as e:
             errors.append({"path": "repo", "message": str(e)})
     return queued, errors
+
+
+def _queue_deploys(config_path: Path, repo_names: list[str]) -> tuple[list[str], list[dict[str, str]]]:
+    return _queue_repo_triggers(config_path, repo_names, mode="deploy")
+
+
+def _queue_syncs(config_path: Path, repo_names: list[str]) -> tuple[list[str], list[dict[str, str]]]:
+    return _queue_repo_triggers(config_path, repo_names, mode="sync")
 
 
 def _parse_deploy_query(query: dict[str, list[str]]) -> list[str]:
@@ -157,6 +171,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/repos/") and parsed.path.endswith("/deploy"):
             repo_name = parsed.path[len("/api/repos/") : -len("/deploy")]
             self._post_repo_deploy(repo_name)
+            return
+        if parsed.path.startswith("/api/repos/") and parsed.path.endswith("/sync"):
+            repo_name = parsed.path[len("/api/repos/") : -len("/sync")]
+            self._post_repo_sync(repo_name)
             return
         self.send_error(404)
 
@@ -279,6 +297,16 @@ class AdminHandler(BaseHTTPRequestHandler):
             _json_response(self, 400, {"ok": False, "errors": errors})
             return
         _json_response(self, 200, {"ok": True, "deploy_queued": queued})
+
+    def _post_repo_sync(self, repo_name: str) -> None:
+        from urllib.parse import unquote
+
+        name = unquote(repo_name).strip()
+        queued, errors = _queue_syncs(self.config_path, [name])
+        if errors and not queued:
+            _json_response(self, 400, {"ok": False, "errors": errors})
+            return
+        _json_response(self, 200, {"ok": True, "sync_queued": queued})
 
     def _merge_sensitive_fields(self, incoming: dict[str, Any]) -> dict[str, Any]:
         if not self.config_path.is_file():
